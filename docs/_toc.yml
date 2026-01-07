@@ -1,0 +1,12 @@
+# Table of contents
+# Learn more at https://jupyterbook.org/customize/toc.html
+
+format: jb-book
+root: index
+title: jaxmat Documentation
+
+
+parts:
+  - caption: Quickstart tutorials
+    chapters:
+        - file: demos/quickstart/getting_started.ipynb
