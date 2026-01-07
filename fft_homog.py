@@ -2,39 +2,31 @@
 import os
 from pathlib import Path
 import pyvista as pv
-import jax, sys, h5py, time, scipy
-import jax.numpy as jnp
-from jax import lax, vmap
-import equinox as eqx
+import jax, h5py
+from time import time
 
-# from eshelbyx.green_operator import compute_Willot_Green_operator
-from eshelbyx.tensors import SymmetricTensor2, SymmetricTensor4, IsotropicTensor4
+jax.config.update("jax_enable_x64", True)
+import jax.numpy as jnp
+import equinox as eqx
+from eshelbyx.green_operator import (
+    GreenOperator,
+)
+from eshelbyx.discretization import (
+    MoulinecSuquetDiscretization,
+    WillotDiscretization,
+    SchneiderDiscretization,
+)
+from eshelbyx.solver import AEM_solver
+
+from eshelbyx.grid import Grid
+from eshelbyx.tensors import (
+    SymmetricTensor2,
+    IsotropicTensor4,
+)
 
 current_folder = Path(__file__).parent.resolve()
 
 
-class Grid(eqx.Module):
-    size: jax.Array
-    shape: tuple = eqx.field(static=True)
-    markers: jax.Array
-    dim: int = 3
-
-    def __init__(self, markers, size=None):
-        self.dim = markers.ndim
-        self.shape = markers.shape
-        if size is None:
-            self.size = jnp.array(self.shape, dtype=jnp.float64)
-        else:
-            self.size = jnp.asarray(size)
-        self.markers = markers
-
-
-jax.config.update("jax_enable_x64", True)
-
-# %%
-
-
-# %%
 with h5py.File(current_folder / "RVE3D-80.mat", "r") as f:
     rd_fiber = f["mesh3D"][()].T
 
@@ -69,7 +61,7 @@ tau = SymmetricTensor2(
     tensor=piecewise_field(field, {1: jnp.eye(3), 0: jnp.zeros((3, 3))}, grid)
 )
 
-E_matrix, E_incl = 1.0, 20.0
+E_matrix, E_incl = 1.0, jnp.inf
 nu_matrix, nu_incl = 0.2, 0.3
 E_map = {0: E_matrix, 1: E_incl}
 nu_map = {0: nu_matrix, 1: nu_incl}
@@ -109,38 +101,7 @@ def apply_alpha(eps, params, C0):
     return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
 
 
-# Gamma_0 = compute_Willot_Green_operator(grid, C0)
-
-from eshelbyx.green_operator import (
-    GreenOperator,
-)
-from eshelbyx.discretization import (
-    MoulinecSuquetDiscretization,
-    WillotDiscretization,
-)
-from eshelbyx.solver import AEM_solver
-from eshelbyx.tensors import Tensor
-import lineax as lx
-from time import time
-
-Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=MoulinecSuquetDiscretization())
-print(Gamma_0.D.shape)
-print(Gamma_0.xi.shape)
-D = Gamma_0.D.reshape(-1, 3)
-singular_mask = Gamma_0.discretization.singular_mask(Gamma_0.xi, Gamma_0.grid)
-print(singular_mask.shape)
-
-# print(Gamma_0.G0_hat.shape)
-# G0 = Gamma_0.G0_hat.reshape(-1, 3, 3)
-# tic = time()
-# G0_iso = jax.vmap(_compute_isotropic_G0_hat, in_axes=(0, 0, None))(
-#     D, singular_mask.ravel(), C0
-# )[0]
-# print("G0 iso construction:", time() - tic)
-# print("Iso", G0_iso[80:100, 1, 1])
-# print("General", G0[80:100, 1, 1])
-# _, Gamma_0 = compute_Willot_Green_operator(grid, C0)
-# raise
+Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=WillotDiscretization(grid))
 
 material_params = (E.ravel(), nu.ravel())
 eps, sig, info = AEM_solver(
@@ -182,9 +143,3 @@ image.cell_data["strain"] = eps.array.reshape((-1, 6))
 image.cell_data["stress"] = sig.array.reshape((-1, 6))
 # C = IsotropicTensor4()
 image.save("RVE_DATA.vtk")
-
-
-raise
-_, Gamma = compute_Willot_Green_operator(grid, lambda_0, mu0)
-
-print(jnp.linalg.norm(Gamma), jnp.max(Gamma))
