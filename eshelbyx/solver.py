@@ -60,22 +60,29 @@ def AEM_solver(
         X_minus_eps = 2.0 * eps_aux - eps
 
         # Residuals
-        Delta_D = ref_norm(XD) / ref_norm(X_minus_eps)
-        Delta_S = ref_norm(X - XD) / ref_norm(eps - E_macro)
+        Delta_D = ref_norm(XD) / jnp.clip(ref_norm(X_minus_eps), 1e-16)
+        Delta_S = ref_norm(X - XD) / jnp.clip(ref_norm(eps - E_macro), 1e-16)
         Delta = jnp.sqrt(Delta_D**2 + Delta_S**2)
 
         # AEM update
         Z = alpha(X) + 2.0 * projection_on_D(X - alpha(X))
 
-        jax.debug.print(
-            "Iteration {}: ||X||={}   Delta = {}", i + 1, C0_inner_product(X, X), Delta
-        )
-
-        lam_new = C0_inner_product(X, Z) / C0_inner_product(Z, Z)
+        # lam_new = C0_inner_product(X, Z) / C0_inner_product(Z, Z)
+        lam_new = 0.5
 
         eps_aux = eps_aux + lam_new * X
+        sig = Gamma_0.apply_C0(2.0 * eps_aux - eps)
+        energy = 0.5 * jnp.mean(jnp.einsum("...ij,...ij->...", sig, eps))
         X = X - lam_new * Z
 
+        jax.debug.print(
+            "Iteration {}: energy = {}   ||X||={}   Delta = {}  lambda = {}",
+            i + 1,
+            energy,
+            ref_norm(X) / E_norm,
+            Delta,
+            lam_new,
+        )
         return i + 1, X.sym, eps_aux.sym, lam_new, Delta
 
     # ------------------------------------------------------------------

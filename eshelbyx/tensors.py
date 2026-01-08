@@ -390,7 +390,7 @@ class IsotropicTensor4(SymmetricTensor4):
 
     def basis_jvp(self, eps):
         return [
-            jnp.linalg.trace(eps) / self.dim,
+            jnp.linalg.trace(eps) / self.dim * SymmetricTensor2.identity(),
             eps - jnp.linalg.trace(eps) / self.dim * SymmetricTensor2.identity(),
         ]
 
@@ -415,7 +415,9 @@ class IsotropicTensor4(SymmetricTensor4):
 
     def __matmul__(self, other):
         if isinstance(other, IsotropicTensor4):
-            return IsotropicTensor4(self.kappa * other.kappa, self.mu * other.mu)
+            return IsotropicTensor4(
+                self.kappa * other.kappa * 3.0, self.mu * other.mu * 2.0
+            )
         elif isinstance(other, Tensor2):
             return other.__class__(array=self.array @ other.array)
         else:
