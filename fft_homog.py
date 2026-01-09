@@ -22,10 +22,7 @@ from eshelbyx.discretization import (
 from eshelbyx.solver import AEM_solver
 
 from eshelbyx.grid import Grid, load_vtk_grid
-from eshelbyx.tensors import (
-    SymmetricTensor2,
-    IsotropicTensor4,
-)
+from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
 
 current_folder = Path(__file__).parent.resolve()
 
@@ -61,7 +58,7 @@ def piecewise_field(field, value_map, grid):
     return field
 
 
-chi = jnp.inf
+chi = 1e6
 Eref = 1.0
 E_matrix, E_incl, E_pore = Eref, Eref * chi, Eref / chi
 nu_matrix, nu_incl, nu_pore = 0.1, 0.2, 0.35
@@ -75,7 +72,8 @@ def elastic_law(eps, material_params):
     E, nu = material_params
     lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
     mu = E / 2 / (1 + nu)
-    sig = lmbda * jnp.linalg.trace(eps) * jnp.eye(3) + 2 * mu * eps
+    e = eps + eps @ eps / 2
+    sig = lmbda * jnp.linalg.trace(e) * jnp.eye(3) + 2 * mu * e
     return SymmetricTensor2(tensor=sig)
 
 
@@ -87,12 +85,27 @@ def constitutive_law(eps, params):
 
 
 def _apply_alpha(eps, material_params, C0):
-    E, nu = material_params
-    lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
-    mu = E / 2 / (1 + nu)
-    C = IsotropicTensor4(lmbda + 2 / 3 * mu, mu)
-    alpha = (C0 @ (C + C0).inv) * 2.0
-    sig = alpha.eval_jvp(eps)
+    # E, nu = material_params
+    # lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
+    # mu = E / 2 / (1 + nu)
+    # C_tang = IsotropicTensor4(lmbda + 2 / 3 * mu, mu)
+
+    def elastic_law_v(eps_v, material_params):
+        eps = SymmetricTensor2(array=eps_v)
+        return elastic_law(eps, material_params).array
+
+    C_ = SymmetricTensor4(
+        array=eqx.filter_jacfwd(elastic_law_v)(eps.array, material_params)
+    )
+    # kappa_tang = jnp.einsum("ijkl,klij", C_, SymmetricTensor4.J()) / 3.0
+    # mu_tang = jnp.einsum("ijkl,klij", C_, SymmetricTensor4.K()) / 2.0
+    # C_tang = IsotropicTensor4(kappa_tang, mu_tang)
+    C_tang = C_
+    # jax.debug.print("Ct = {}", C_.shape)
+    # alpha = ((C_tang + C0).inv @ C0) * 2.0
+    # sig = alpha.eval_jvp(eps)
+    iC = (C_tang + C0).inv
+    sig = jnp.einsum("ijkl,klmn,mn->ij", iC, 2 * C0, eps)
     return SymmetricTensor2(tensor=sig)
 
 
@@ -128,7 +141,7 @@ material_params = (E.ravel(), nu.ravel())
 
 
 E_macro_list = [
-    SymmetricTensor2(array=jnp.asarray([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])),
+    SymmetricTensor2(array=jnp.asarray([0.1, 0.0, 0.0, 0.0, 0.0, 0.0])),
     #     SymmetricTensor2(array=jnp.asarray([1.0, -0.5, -0.5, 0.0, 0.0, 0.0])),
     #     SymmetricTensor2(array=jnp.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
 ]
@@ -143,35 +156,52 @@ options = jax.profiler.ProfileOptions()
 # options.host_tracer_level = 1
 profiler.start_trace("/tmp/jax_trace")
 from eshelbyx.krylov_solver import KrylovAEMSolver, KrylovLSSolver, CGLSSolver
+from eshelbyx.nonlinear_krylov_solver import NewtonKrylovAEMSolver
 
 for E_macro in E_macro_list:
-    solver = CGLSSolver
-    tic = time()
-    eps, sig, info = solver(
-        broadcast_to_grid(E_macro, grid),
-        C0,
-        C_eps,
-        ideltaC,
-        Gamma_0,
-        tol=1e-8,
-    )
-    print("Iterations", info["num_steps"])
-    print(f"{solver.__name__} solver time", time() - tic)
-    print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+    # solver = CGLSSolver
+    # tic = time()
+    # eps, sig, info = solver(
+    #     broadcast_to_grid(E_macro, grid),
+    #     C0,
+    #     C_eps,
+    #     ideltaC,
+    #     Gamma_0,
+    #     tol=1e-8,
+    # )
+    # print("Iterations", info["num_steps"])
+    # print(f"{solver.__name__} solver time", time() - tic)
+    # print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
 
     for solver in [KrylovAEMSolver]:
         tic = time()
         eps, sig, info = solver(
-            broadcast_to_grid(E_macro, grid),
-            C0,
-            C_eps,
-            alpha,
-            Gamma_0,
-            tol=1e-8,
+            broadcast_to_grid(E_macro, grid), C0, C_eps, alpha, Gamma_0, tol=1e-6
         )
         print("Iterations", info["num_steps"])
         print(f"{solver.__name__} solver time", time() - tic)
         print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+
+    for solver in [NewtonKrylovAEMSolver]:
+        tic = time()
+        eps, sig, info = solver(
+            broadcast_to_grid(E_macro, grid), C0, C_eps, alpha, Gamma_0, tol=1e-6
+        )
+        it = info["num_steps"]
+        print("Iterations", it)
+        print("Linear solver iterations", info["linear_solver_iterations"])
+        print("Convergence", info["residual"])
+        print(f"{solver.__name__} solver time", time() - tic)
+        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+
+    # for solver in [NewtonKrylovAEMSolver]:
+    #     tic = time()
+    #     eps, sig, info = solver(
+    #         broadcast_to_grid(E_macro, grid), C0, C_eps, alpha, Gamma_0, tol=1e-6
+    #     )
+    #     print("Iterations", info["num_steps"])
+    #     print(f"{solver.__name__} solver time", time() - tic)
+    #     print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
     print("\n")
 profiler.stop_trace()
 # print("Mean alpha_strain", jnp.mean(alp_eps, axis=[0, 1, 2]))
