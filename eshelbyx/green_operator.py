@@ -1,3 +1,4 @@
+from functools import partial
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -34,39 +35,50 @@ class GreenOperator(lx.AbstractLinearOperator):
                 self.C0,
             ).reshape(self.grid.shape + (3, 3))
 
+    @partial(jax.remat, prevent_cse=False)
+    def _Gamma_0_func_impl(self, Y):
+        with jax.named_scope("Gamma0/fft"):
+            Y_hat = jnp.fft.fftn(Y, axes=(0, 1, 2))
+
+        with jax.named_scope("Gamma0/div"):
+            v_hat = self.discretization.apply_divergence(Y_hat)
+
+        with jax.named_scope("Gamma0/G0_hat"):
+            u_hat = jnp.einsum(
+                "...ij,...j->...i",
+                self.G0_hat,
+                v_hat,
+            )
+        with jax.named_scope("Gamma0/sym_grad"):
+            eps_hat = self.discretization.apply_symmetric_gradient(u_hat)
+
+        with jax.named_scope("Gamma0/ifft"):
+            out = jnp.fft.ifftn(eps_hat, axes=(0, 1, 2)).real
+            return out
+
     def Gamma_0_func(self, Y):
-        Y_hat = jnp.fft.fftn(Y, axes=(0, 1, 2))
+        return self._Gamma_0_func_impl(Y)
 
-        v_hat = self.discretization.apply_divergence(Y_hat)
-
-        u_hat = jnp.einsum(
-            "...ij,...j->...i",
-            self.G0_hat,
-            v_hat,
-        )
-
-        eps_hat = self.discretization.apply_symmetric_gradient(u_hat)
-
-        return jnp.fft.ifftn(eps_hat, axes=(0, 1, 2)).real
-
+    @eqx.filter_jit
     def mv(self, vector, out=None):
-        return SymmetricTensor2(tensor=self.Gamma_0_func(vector))
+        return self.Gamma_0_func(vector)
+        # return SymmetricTensor2(tensor=self.Gamma_0_func(vector))
 
     @eqx.filter_jit
     def apply_C0(self, eps):
         return jnp.einsum("ijkl,...kl->...ij", self.C0, eps)
 
     def as_matrix(self):
-        return lx.materialise(self).as_matrix()
+        raise NotImplementedError("Matrix-free operator")
 
     def transpose(self):
         return self  # FIXME
 
     def in_structure(self):
-        return jax.ShapeDtypeStruct(shape=(self.grid.shape, 3, 3), dtype=jnp.float64)
+        return jax.ShapeDtypeStruct(shape=self.grid.shape + (3, 3), dtype=jnp.float64)
 
     def out_structure(self):
-        return self.in_structure
+        return self.in_structure()
 
 
 @lx.is_symmetric.register(GreenOperator)

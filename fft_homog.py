@@ -6,6 +6,9 @@ import jax, h5py
 from time import time
 
 jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "gpu")
+# jax.config.update("jax_disable_jit", True)
+
 import jax.numpy as jnp
 import equinox as eqx
 from eshelbyx.green_operator import (
@@ -58,13 +61,10 @@ def piecewise_field(field, value_map, grid):
     return field
 
 
-# field = jnp.zeros(grid.shape + (3, 3))
-# tau = SymmetricTensor2(
-#     tensor=piecewise_field(field, {1: jnp.eye(3), 0: jnp.zeros((3, 3))}, grid)
-# )
-chi = 100.0
-E_matrix, E_incl, E_pore = E0, E0 * chi, E0 / chi
-nu_matrix, nu_incl, nu_pore = nu0, nu0, nu0
+chi = jnp.inf
+Eref = 1.0
+E_matrix, E_incl, E_pore = Eref, Eref * chi, Eref / chi
+nu_matrix, nu_incl, nu_pore = 0.1, 0.2, 0.35
 E_map = {0: E_matrix, 1: E_pore, 2: E_incl}
 nu_map = {0: nu_matrix, 1: nu_pore, 2: nu_incl}
 E = piecewise_field(jnp.zeros(grid.shape), E_map, grid)
@@ -83,7 +83,7 @@ def elastic_law(eps, material_params):
 def constitutive_law(eps, params):
     eps_flatten = eps.flatten_batch_dims()
     sig_flatten = jax.vmap(elastic_law)(eps_flatten, params)
-    return sig_flatten
+    return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
 
 
 def _apply_alpha(eps, material_params, C0):
@@ -103,20 +103,77 @@ def apply_alpha(eps, params, C0):
     return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
 
 
+def _apply_ideltaC(eps, material_params, C0):
+    E, nu = material_params
+    lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
+    mu = E / 2 / (1 + nu)
+    C = IsotropicTensor4(lmbda + 2 / 3 * mu, mu)
+    alpha = (C - C0).inv
+    sig = alpha.eval_jvp(eps)
+    return SymmetricTensor2(tensor=sig)
+
+
+@eqx.filter_jit
+def apply_ideltaC(eps, params, C0):
+    eps_flatten = eps.flatten_batch_dims()
+    sig_flatten = jax.vmap(_apply_ideltaC, in_axes=(0, 0, None))(
+        eps_flatten, params, C0
+    )
+    return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
+
+
 Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=WillotDiscretization(grid))
 
 material_params = (E.ravel(), nu.ravel())
 
-eps, sig, info = AEM_solver(
-    broadcast_to_grid(E_macro, grid),
-    C0,
-    lambda eps: apply_alpha(eps, material_params, C0),
-    Gamma_0,
-    tol=1e-6,
-)
-# print(eps.shape, alp_eps.shape)
-print("Mean strain", jnp.mean(eps, axis=[0, 1, 2]))
-print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+
+E_macro_list = [
+    SymmetricTensor2(array=jnp.asarray([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])),
+    #     SymmetricTensor2(array=jnp.asarray([1.0, -0.5, -0.5, 0.0, 0.0, 0.0])),
+    #     SymmetricTensor2(array=jnp.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
+]
+alpha = lambda eps: apply_alpha(eps, material_params, C0)
+C_eps = lambda eps: constitutive_law(eps, material_params)
+ideltaC = lambda eps: apply_ideltaC(eps, material_params, C0)
+
+from jax import profiler
+
+options = jax.profiler.ProfileOptions()
+# options.python_tracer_level = 1
+# options.host_tracer_level = 1
+profiler.start_trace("/tmp/jax_trace")
+from eshelbyx.krylov_solver import KrylovAEMSolver, KrylovLSSolver, CGLSSolver
+
+for E_macro in E_macro_list:
+    solver = CGLSSolver
+    tic = time()
+    eps, sig, info = solver(
+        broadcast_to_grid(E_macro, grid),
+        C0,
+        C_eps,
+        ideltaC,
+        Gamma_0,
+        tol=1e-8,
+    )
+    print("Iterations", info["num_steps"])
+    print(f"{solver.__name__} solver time", time() - tic)
+    print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+
+    for solver in [KrylovAEMSolver]:
+        tic = time()
+        eps, sig, info = solver(
+            broadcast_to_grid(E_macro, grid),
+            C0,
+            C_eps,
+            alpha,
+            Gamma_0,
+            tol=1e-8,
+        )
+        print("Iterations", info["num_steps"])
+        print(f"{solver.__name__} solver time", time() - tic)
+        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+    print("\n")
+profiler.stop_trace()
 # print("Mean alpha_strain", jnp.mean(alp_eps, axis=[0, 1, 2]))
 # print("Mean stress", jnp.mean(sig, axis=0))  # jnp.mean(sig, axis=[0, 1, 2]))
 

@@ -10,7 +10,7 @@ def voxelize_on_grid(mesh: pv.PolyData, grid: pv.ImageData):
     """
     centers = grid.cell_centers()
 
-    enclosed = centers.select_enclosed_points(mesh, tolerance=0.0)
+    enclosed = centers.select_enclosed_points(mesh, tolerance=1e-16)
     inside = enclosed["SelectedPoints"].view(np.bool_)
 
     nx, ny, nz = grid.dimensions

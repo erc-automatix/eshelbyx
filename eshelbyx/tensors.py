@@ -133,33 +133,50 @@ class Tensor2(Tensor):
 
     def _as_array(self, tensor):
         tensor = jnp.asarray(tensor)
-        d = self.dim
-        vec = jnp.zeros(tensor.shape[: -self.rank] + self.base_array_shape)
-        buff = 0
-        for i in range(d):
-            vec = vec.at[..., i].set(tensor[..., i, i])
-            for j in range(i + 1, d):
-                vec = vec.at[..., d + buff].set(tensor[..., i, j])
-                vec = vec.at[..., d + buff + 1].set(tensor[..., j, i])
-                buff += 2
-        return vec
+        # tensor shape: (..., 3, 3)
+
+        # Indices for full tensor flattening
+        # order: (0,0), (1,1), (2,2), (0,1), (1,0), (0,2), (2,0), (1,2), (2,1)
+        idx = jnp.array(
+            [
+                [0, 0],
+                [1, 1],
+                [2, 2],
+                [0, 1],
+                [1, 0],
+                [0, 2],
+                [2, 0],
+                [1, 2],
+                [2, 1],
+            ]
+        )
+
+        out = tensor[..., idx[:, 0], idx[:, 1]]
+        return out
 
     def _as_tensor(self, array):
+        # array shape: (..., 9)
         d = self.dim
-        tensor = jnp.zeros(array.shape[: -self.array_rank] + (d, d))
-        # Diagonal terms
-        for i in range(d):
-            tensor = tensor.at[..., i, i].set(array[..., i])
+        batch = array.shape[:-1]
 
-        # Off-diagonal terms
-        offset = d
-        for i in range(d):
-            for j in range(i + 1, d):
-                tensor = tensor.at[..., i, j].set(array[..., offset])
-                tensor = tensor.at[..., j, i].set(array[..., offset + 1])
-                offset += 2
+        out = jnp.zeros(batch + (d, d), array.dtype)
 
-        return tensor
+        idx = jnp.array(
+            [
+                [0, 0],
+                [1, 1],
+                [2, 2],
+                [0, 1],
+                [1, 0],
+                [0, 2],
+                [2, 0],
+                [1, 2],
+                [2, 1],
+            ]
+        )
+
+        out = out.at[..., idx[:, 0], idx[:, 1]].set(array)
+        return out
 
     # ----------------- custom pytree -----------------
     def __eqx_pytree__(self):
@@ -211,34 +228,50 @@ class SymmetricTensor2(Tensor2):
         return jnp.allclose(self, self.T)
 
     def _as_array(self, tensor):
-        d = self.dim
-        vec = jnp.zeros(tensor.shape[: -self.rank] + self.base_array_shape)
-        buff = 0
-        for i in range(d):
-            vec = vec.at[..., i].set(tensor[..., i, i])
-            for j in range(i + 1, d):
-                vec = vec.at[..., d + buff].set(jnp.sqrt(2) * tensor[..., i, j])
-                buff += 1
-        return vec
+        tensor = jnp.asarray(tensor)
+        sqrt2 = jnp.sqrt(2.0)
+
+        # order: (0,0), (1,1), (2,2), (0,1), (0,2), (1,2)
+        idx = jnp.array(
+            [
+                [0, 0],
+                [1, 1],
+                [2, 2],
+                [0, 1],
+                [0, 2],
+                [1, 2],
+            ]
+        )
+
+        scale = jnp.array([1.0, 1.0, 1.0, sqrt2, sqrt2, sqrt2])
+
+        out = tensor[..., idx[:, 0], idx[:, 1]] * scale
+        return out
 
     def _as_tensor(self, array):
+        # array shape (..., 6)
+        batch = array.shape[:-1]
         d = self.dim
-        tensor = jnp.zeros(array.shape[: -self.array_rank] + (d, d))
+        sqrt2 = jnp.sqrt(2.0)
 
-        # Diagonal entries
-        for i in range(d):
-            tensor = tensor.at[..., i, i].set(array[..., i])
+        out = jnp.zeros(batch + (d, d), array.dtype)
 
-        # Off-diagonal entries (upper triangle) scaled by 1/sqrt(2)
-        offset = d
-        for i in range(d):
-            for j in range(i + 1, d):
-                val = array[..., offset] / jnp.sqrt(2)
-                tensor = tensor.at[..., i, j].set(val)
-                tensor = tensor.at[..., j, i].set(val)  # symmetry
-                offset += 1
+        idx = jnp.array(
+            [
+                [0, 0],
+                [1, 1],
+                [2, 2],
+                [0, 1],
+                [0, 2],
+                [1, 2],
+            ]
+        )
 
-        return tensor
+        vals = array / jnp.array([1.0, 1.0, 1.0, sqrt2, sqrt2, sqrt2])
+
+        out = out.at[..., idx[:, 0], idx[:, 1]].set(vals)
+        out = out.at[..., idx[:, 1], idx[:, 0]].set(vals)  # symmetry
+        return out
 
     def __matmul__(self, other):
         # Multiplication of symmetric tensors cannot be ensured to remain symmetric
