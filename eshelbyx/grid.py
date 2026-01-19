@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 import pyvista as pv
+from eshelbyx.tensors import Tensor
 
 
 class Grid(eqx.Module):
@@ -18,6 +19,15 @@ class Grid(eqx.Module):
         else:
             self.size = jnp.asarray(size)
         self.markers = markers
+
+    def broadcast_to_grid(self, tensor):
+        if isinstance(tensor, Tensor):
+            return tensor.__class__(
+                array=jnp.broadcast_to(
+                    tensor.array,
+                    self.shape + tensor.array.shape,
+                )
+            )
 
 
 def load_vtk_grid(filename, marker_name=None):
