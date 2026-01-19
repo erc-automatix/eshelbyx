@@ -22,7 +22,7 @@ from eshelbyx.discretization import (
 from eshelbyx.grid import load_vtk_grid
 from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4
 from eshelbyx.krylov_solver import KrylovAEMSolver
-from eshelbyx.solver import AEM_solver
+from eshelbyx.solver import AEM_solver, A2EM_solver
 
 current_folder = Path(__file__).parent.resolve()
 
@@ -43,7 +43,7 @@ def piecewise_field(field, value_map, grid):
     return field
 
 
-chi = 10.0
+chi = 10000.0
 Eref = 1.0
 E_matrix, E_incl, E_pore = Eref, Eref * chi, Eref / chi
 nu_matrix, nu_incl, nu_pore = 0.1, 0.2, 0.35
@@ -89,7 +89,7 @@ def apply_alpha(eps, params, C0):
 material_params = (E.ravel(), nu.ravel())
 
 
-alpha = lambda eps: apply_alpha(eps, material_params, C0)
+alpha = lambda eps, scale=1.0: apply_alpha(eps, material_params, C0 * scale)
 C_eps = lambda eps: constitutive_law(eps, material_params)
 
 
@@ -99,9 +99,9 @@ E_macro = grid.broadcast_to_grid(E_macro)  # create a field on the grid
 Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=WillotDiscretization(grid))
 
 
-for solver in [AEM_solver] * 2:
+for solver in [A2EM_solver] * 2:
     tic = time()
-    eps, sig, info = solver(E_macro, C0, C_eps, alpha, Gamma_0, tol=1e-6)
+    eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1e-6, max_iter=200)
     print("Iterations", info["num_steps"])
     print(f"{solver.__name__} solver time", time() - tic)
     print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
