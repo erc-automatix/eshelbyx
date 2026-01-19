@@ -9,7 +9,7 @@ from eshelbyx.tensors import SymmetricTensor2
 
 
 @eqx.filter_jit
-def AEM_solver(E_macro, C0, alpha, Gamma_0, max_iter=1000, tol=1e-10):
+def AEM_solver(E_macro, C0, C_eps, alpha, Gamma_0, max_iter=1000, tol=1e-10):
 
     # ------------------------
     # Helpers
