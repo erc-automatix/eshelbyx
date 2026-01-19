@@ -68,6 +68,10 @@ class GreenOperator(lx.AbstractLinearOperator):
     def apply_C0(self, eps):
         return jnp.einsum("ijkl,...kl->...ij", self.C0, eps)
 
+    @eqx.filter_jit
+    def apply_C0_inv(self, eps):
+        return jnp.einsum("ijkl,...kl->...ij", self.C0.inv, eps)
+
     def as_matrix(self):
         raise NotImplementedError("Matrix-free operator")
 
