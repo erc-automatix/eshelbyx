@@ -22,7 +22,7 @@ from eshelbyx.discretization import (
 from eshelbyx.grid import load_vtk_grid
 from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4
 from eshelbyx.krylov_solver import KrylovAEMSolver
-from eshelbyx.solver import AEM_solver, A2EM_solver
+from eshelbyx.solver import A2EMSolver, AEMSolver
 
 current_folder = Path(__file__).parent.resolve()
 
@@ -43,7 +43,7 @@ def piecewise_field(field, value_map, grid):
     return field
 
 
-chi = 10000.0
+chi = jnp.inf  # double-contrast ratio
 Eref = 1.0
 E_matrix, E_incl, E_pore = Eref, Eref * chi, Eref / chi
 nu_matrix, nu_incl, nu_pore = 0.1, 0.2, 0.35
@@ -54,6 +54,8 @@ nu = piecewise_field(jnp.zeros(grid.shape), nu_map, grid)
 
 
 def elastic_law(eps, material_params):
+    """Elastic law at the material point level. Takes a `SymmetricTensor2` as strain input
+    and outputs stress as a `SymmetricTensor2`."""
     E, nu = material_params
     lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
     mu = E / 2 / (1 + nu)
@@ -75,15 +77,16 @@ def _apply_alpha(eps, material_params, C0):
     C = IsotropicTensor4(lmbda + 2 / 3 * mu, mu)
 
     iC = (C + C0).inv
-    sig = jnp.einsum("ijkl,klmn,mn->ij", iC, 2 * C0, eps)
+    alp = iC @ (C0 * 2.0)
+    sig = alp.eval_jvp(eps)  # here alp is a IsotropicTensor4
     return SymmetricTensor2(tensor=sig)
 
 
 @eqx.filter_jit
 def apply_alpha(eps, params, C0):
-    eps_flatten = eps.flatten_batch_dims()
-    sig_flatten = jax.vmap(_apply_alpha, in_axes=(0, 0, None))(eps_flatten, params, C0)
-    return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
+    eps_flatten = jnp.asarray(eps).reshape(-1, 3, 3)
+    sig_tensor = jax.vmap(_apply_alpha, in_axes=(0, 0, None))(eps_flatten, params, C0)
+    return sig_tensor.tensor.reshape(eps.shape)
 
 
 material_params = (E.ravel(), nu.ravel())
@@ -98,17 +101,28 @@ E_macro = grid.broadcast_to_grid(E_macro)  # create a field on the grid
 
 Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=WillotDiscretization(grid))
 
-
-for solver in [A2EM_solver] * 2:
+# A2EM solver
+for solver in [A2EMSolver] * 2:
     tic = time()
-    eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1e-6, max_iter=200)
-    print("Iterations", info["num_steps"])
+    eps, sig, info = solver(
+        E_macro, alpha, Gamma_0, tol=1e-6, max_iter=300, auto_scale=True, verbose=False
+    )
+
+    print("Solver info:", info)  # ["num_steps"])
     print(f"{solver.__name__} solver time", time() - tic)
     print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+    print("\n")
 
+# Krylov-AEM solver
+for solver in [KrylovAEMSolver] * 2:
+    tic = time()
+    eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1e-6, max_iter=300)
+    print("Solver info:", info)  # ["num_steps"])
+    print(f"{solver.__name__} solver time", time() - tic)
+    print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
     print("\n")
 
 # store results
-pv_grid.cell_data["strain"] = eps.array.reshape((-1, 6))
-pv_grid.cell_data["stress"] = sig.array.reshape((-1, 6))
+pv_grid.cell_data["strain"] = eps.reshape((-1, 3, 3))
+pv_grid.cell_data["stress"] = sig.reshape((-1, 3, 3))
 pv_grid.save(file_name.removesuffix(".vti") + "_results.vtk")
