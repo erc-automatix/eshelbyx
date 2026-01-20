@@ -16,10 +16,15 @@ class GreenOperator(lx.AbstractLinearOperator):
     C0: Tensor
     grid: eqx.Module
     discretization: DiscretizationScheme
+    G0_hat: jax.Array
 
-    G0_hat: jax.Array = eqx.field(init=False)
+    def __init__(self, grid, C0, discretization):
+        self.grid = grid
+        self.C0 = C0
+        self.discretization = discretization
+        self._compute_G0_hat()
 
-    def __post_init__(self):
+    def _compute_G0_hat(self):
         if isinstance(self.C0, IsotropicTensor4):
             self.G0_hat = jax.vmap(compute_isotropic_G0_hat, in_axes=(0, 0, 0, None))(
                 self.discretization.D_plus.reshape(-1, 3),
