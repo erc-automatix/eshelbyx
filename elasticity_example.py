@@ -6,10 +6,11 @@ import jax
 from time import time
 
 jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_platform_name", "gpu")
+jax.config.update("jax_platform_name", "cpu")
 
 import jax.numpy as jnp
 import equinox as eqx
+
 from eshelbyx.green_operator import (
     GreenOperator,
 )
@@ -19,21 +20,17 @@ from eshelbyx.discretization import (
     SchneiderDiscretization,
 )
 
+
 from eshelbyx.grid import load_vtk_grid
 from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4
 from eshelbyx.krylov_solver import KrylovAEMSolver
-from eshelbyx.solver import A2EMSolver, AEMSolver
+from eshelbyx.solver import A2EMSolver, AEMSolver, MSSolver
 
 current_folder = Path(__file__).parent.resolve()
 
-file_name = "3_phase_microstructure_32.vti"
+file_name = "eshelbyx/3_phase_microstructure_32.vti"
 grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
 
-# Reference medium
-E0 = 1.0
-nu0 = 0.3
-lambda_0, mu0 = E0 * nu0 / (1 + nu0) / (1 - 2 * nu0), E0 / 2 / (1 + nu0)
-C0 = IsotropicTensor4(lambda_0 + 2 / 3 * mu0, mu0)
 
 
 # Define phase-wise properties based on grid.markers
@@ -43,19 +40,52 @@ def piecewise_field(field, value_map, grid):
     return field
 
 
-chi = jnp.inf  # double-contrast ratio
+# Material parameters for the 3 phase microstructure problem
+chi = 1000  # double-contrast ratio
 Eref = 1.0
 E_matrix, E_incl, E_pore = Eref, Eref * chi, Eref / chi
 nu_matrix, nu_incl, nu_pore = 0.1, 0.2, 0.35
+
+
+# Solver 
+solver_used = MSSolver
+
+# Discretization
+discretization_used = WillotDiscretization
+
+# Reference medium depending on the solver being used
+if solver_used == AEMSolver or solver_used == A2EMSolver or solver_used == KrylovAEMSolver :
+    # Reference medium for the AEM and A2EM solvers
+    E0 = 1.0
+    nu0 = 0.3
+    
+elif solver_used == MSSolver :
+    # Reference medium for MS solver
+    K_incl = E_incl / (3 * (1 - 2*nu_incl))
+    K_pore = E_pore / (3 * (1 - 2*nu_pore))
+    K0 = (K_incl + K_pore)/2
+    
+    mu_incl = E_incl / (2 * (1 + nu_incl))
+    mu_pore = E_pore / (2 * (1 + nu_pore))
+    mu0 = (mu_incl + mu_pore)/2
+    
+    E0 = (9*K0*mu0) / (3*K0 + mu0)
+    nu0 = (3*K0 - 2*mu0) / 2 / (3*K0 + mu0)
+
+lambda_0, mu0 = E0 * nu0 / (1 + nu0) / (1 - 2 * nu0), E0 / 2 / (1 + nu0)
+C0 = IsotropicTensor4(lambda_0 + 2 / 3 * mu0, mu0)
+
+
+# Material parameters mapping
 E_map = {0: E_matrix, 1: E_pore, 2: E_incl}
 nu_map = {0: nu_matrix, 1: nu_pore, 2: nu_incl}
 E = piecewise_field(jnp.zeros(grid.shape), E_map, grid)
 nu = piecewise_field(jnp.zeros(grid.shape), nu_map, grid)
 
 
+
 def elastic_law(eps, material_params):
-    """Elastic law at the material point level. Takes a `SymmetricTensor2` as strain input
-    and outputs stress as a `SymmetricTensor2`."""
+    #Elastic law at the material point level. Takes a `SymmetricTensor2` as strain input and outputs stress as a `SymmetricTensor2`.
     E, nu = material_params
     lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
     mu = E / 2 / (1 + nu)
@@ -70,8 +100,23 @@ def constitutive_law(eps, params):
     return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
 
 
+
+# Material parameters mapping of reference medium for Moulinec and Suquet's solver
+E0_map = {0: E0, 1: E0, 2: E0}
+nu0_map = {0: nu0, 1: nu0, 2: nu0}
+E0 = piecewise_field(jnp.zeros(grid.shape), E0_map, grid)
+nu0 = piecewise_field(jnp.zeros(grid.shape), nu0_map, grid)
+    
+material_params_0 = (E0.ravel(), nu0.ravel())
+    
+C_eps_0 = lambda eps: constitutive_law(eps, material_params_0)
+
+
+
 def _apply_alpha(eps, material_params, C0):
+        
     E, nu = material_params
+            
     lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
     mu = E / 2 / (1 + nu)
     C = IsotropicTensor4(lmbda + 2 / 3 * mu, mu)
@@ -81,6 +126,7 @@ def _apply_alpha(eps, material_params, C0):
     sig = alp.eval_jvp(eps)  # here alp is a IsotropicTensor4
     return SymmetricTensor2(tensor=sig)
 
+    
 
 @eqx.filter_jit
 def apply_alpha(eps, params, C0):
@@ -89,40 +135,82 @@ def apply_alpha(eps, params, C0):
     return sig_tensor.tensor.reshape(eps.shape)
 
 
+
 material_params = (E.ravel(), nu.ravel())
 
 
-alpha = lambda eps, scale=1.0: apply_alpha(eps, material_params, C0 * scale)
+alpha = lambda eps, scale=1.0: apply_alpha(eps, material_params,  C0 * scale)
 C_eps = lambda eps: constitutive_law(eps, material_params)
 
 
 E_macro = SymmetricTensor2(array=jnp.asarray([1.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
 E_macro = grid.broadcast_to_grid(E_macro)  # create a field on the grid
 
-Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=WillotDiscretization(grid))
 
-# A2EM solver
-for solver in [A2EMSolver] * 2:
-    tic = time()
-    eps, sig, info = solver(
-        E_macro, alpha, Gamma_0, tol=1e-6, max_iter=300, auto_scale=True, verbose=False
-    )
+Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=discretization_used(grid))
 
-    print("Solver info:", info)  # ["num_steps"])
-    print(f"{solver.__name__} solver time", time() - tic)
-    print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-    print("\n")
 
-# Krylov-AEM solver
-for solver in [KrylovAEMSolver] * 2:
-    tic = time()
-    eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1e-6, max_iter=300)
-    print("Solver info:", info)  # ["num_steps"])
-    print(f"{solver.__name__} solver time", time() - tic)
-    print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-    print("\n")
 
+if solver_used == MSSolver :
+    # Moulinec and Suquet's solver
+    for solver in [MSSolver]:
+        tic = time()
+        eps, sig, info = solver(E_macro, C_eps, C_eps_0, Gamma_0, tol=1e-6, max_iter=500)
+        print("Solver info:", info)  # ["num_steps"])
+        print(f"{solver.__name__} solver time", time() - tic)
+        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+        print("\n")
+
+elif solver_used == AEMSolver :
+    # AEM solver
+    for solver in [AEMSolver]:
+        tic = time()
+        eps_aux, eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1.0e-6, max_iter=500)
+        print("Solver info:", info)  # ["num_steps"])
+        print(f"{solver.__name__} solver time", time() - tic)
+        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+        print("\n")
+        eps_aux_jnp = jnp.array(eps_aux)
+        pv_grid.cell_data["strain_aux"] = eps_aux_jnp.reshape((-1, 3, 3))
+        scale_f = 1.0
+
+elif solver_used == A2EMSolver :
+    # A2EM solver
+    for solver in [A2EMSolver]:
+        tic = time()
+        eps_aux, eps, sig, info, scale_f = solver(
+            E_macro, alpha, Gamma_0, tol=1e-6, max_iter=500, auto_scale=True, verbose=True
+        )
+    
+        print("Solver info:", info)  # ["num_steps"])
+        print(f"{solver.__name__} solver time", time() - tic)
+        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+        print("\n")
+        pv_grid.cell_data["strain_aux"] = eps_aux.reshape((-1, 3, 3))
+
+elif solver_used == KrylovAEMSolver :
+    # Krylov-AEM solver
+    for solver in [KrylovAEMSolver]:
+        tic = time()
+        eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1e-6, max_iter=300)
+        print("Solver info:", info)  # ["num_steps"])
+        print(f"{solver.__name__} solver time", time() - tic)
+        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+        print("\n")
+        
 # store results
 pv_grid.cell_data["strain"] = eps.reshape((-1, 3, 3))
 pv_grid.cell_data["stress"] = sig.reshape((-1, 3, 3))
+
+
+
+# Ajouter la composante zz au fichier VTK
+pv_grid.cell_data["stress_zz"] = sig[...,2, 2].ravel()
+
 pv_grid.save(file_name.removesuffix(".vti") + "_results.vtk")
+
+
+
+
+
+

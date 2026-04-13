@@ -33,7 +33,7 @@ class GreenOperator(lx.AbstractLinearOperator):
                 self.C0,
             )[0].reshape(self.grid.shape + (3, 3))
         else:
-            self.G0_hat = jax.vmap(compute_G0_hat, in_axes=(0, 0, None))(
+            self.G0_hat = jax.vmap(compute_G0_hat, in_axes=(0, 0, 0, None))(
                 self.discretization.D_plus.reshape(-1, 3),
                 self.discretization.D_minus.reshape(-1, 3),
                 self.discretization.singular_mask,
@@ -50,7 +50,7 @@ class GreenOperator(lx.AbstractLinearOperator):
 
         with jax.named_scope("Gamma0/G0_hat"):
             u_hat = jnp.einsum(
-                "...ij,...j->...i",
+                "...ij,...i->...j",
                 self.G0_hat,
                 v_hat,
             )
@@ -67,7 +67,7 @@ class GreenOperator(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def mv(self, vector, out=None):
         return self.Gamma_0_func(vector)
-        # return SymmetricTensor2(tensor=self.Gamma_0_func(vector))
+        #return SymmetricTensor2(tensor=self.Gamma_0_func(vector))
 
     @eqx.filter_jit
     def apply_C0(self, eps):

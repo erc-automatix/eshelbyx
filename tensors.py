@@ -391,15 +391,66 @@ class SymmetricTensor4(Tensor):
         tensor = tensor.at[j_, i_, k_, l_].set(vals)
         tensor = tensor.at[j_, i_, l_, k_].set(vals)
         return tensor
-
+    
+    
     def __matmul__(self, other):
         return other.__class__(
             tensor=jnp.tensordot(jnp.asarray(self), jnp.asarray(other).T)
         )
+    
+    
+    def __mul__(self, scalar):
+        return self.__class__(tensor=jnp.asarray(self) * scalar)
+
+    def __rmul__(self, scalar):
+        return self.__class__(tensor=scalar * jnp.asarray(self))
 
     @property
     def inv(self):
         return self.__class__(array=jnp.linalg.inv(self.array))
+    
+    
+    @staticmethod
+    def _symmetrize(T):
+        return (
+            T
+            + T.transpose(1, 0, 2, 3)  # ij
+            + T.transpose(0, 1, 3, 2)  # kl
+            + T.transpose(1, 0, 3, 2)
+        ) / 4
+    
+    @staticmethod
+    def _symmetrize_full(T):
+        T_minor = (
+            T
+            + T.transpose(1, 0, 2, 3)
+            + T.transpose(0, 1, 3, 2)
+            + T.transpose(1, 0, 3, 2)
+        ) / 4
+    
+        return (T_minor + T_minor.transpose(2, 3, 0, 1)) / 2
+    
+    
+    @classmethod
+    def from_function(cls, func, *args, symmetrize=False):
+        d = cls.dim
+    
+        i, j, k, l = jnp.meshgrid(
+            jnp.arange(d),
+            jnp.arange(d),
+            jnp.arange(d),
+            jnp.arange(d),
+            indexing="ij",
+        )
+    
+        T = func(i, j, k, l, *args)
+    
+        if symmetrize:
+            T = cls._symmetrize_full(T)
+    
+        return cls(tensor=T)
+
+
 
 
 def _eval_basis(coeffs, basis):

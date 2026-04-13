@@ -59,16 +59,23 @@ class DiscretizationScheme(eqx.Module):
 
     def apply_divergence(self, tau_hat):
         return jnp.einsum(
-            "...ij,...j->...i",
+            "...ij,...i->...j",
             tau_hat,
             self.D_minus,
         )
-
+    
+    """
     def apply_symmetric_gradient(self, u_hat):
         return 0.5 * (
             jnp.einsum("...i,...j->...ij", u_hat, self.D_plus)
             + jnp.einsum("...j,...i->...ij", u_hat, self.D_plus)
         )
+    """
+    def apply_symmetric_gradient(self, u_hat):
+        return 0.5 * (
+        jnp.einsum("...i,...j->...ij", self.D_plus, u_hat)
+        + jnp.einsum("...j,...i->...ij", self.D_plus, u_hat)
+    )
 
 
 class MoulinecSuquetDiscretization(DiscretizationScheme):
