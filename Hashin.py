@@ -26,9 +26,10 @@ from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor
 from eshelbyx.krylov_solver import KrylovAEMSolver
 from eshelbyx.solver import A2EMSolver, AEMSolver, MSSolver
 
+# commentaire
 current_folder = Path(__file__).parent.resolve()
 
-file_name = "eshelbyx/results/Hashin_num_64.vti"
+file_name = "eshelbyx/results/Hashin_num_65.vti"
 grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
 
 
@@ -74,7 +75,7 @@ Rext = 0.4
 phi1 = (Rint/Rext)**3
 phi2 = 1 - phi1
 soft_center = True     # True : pore softer than the coating
-chi = 1000
+chi = 1e12
 Keff=1.0
 mueff=0.6
 
@@ -467,7 +468,7 @@ elif solver_used == A2EMSolver :
     for solver in [A2EMSolver]:
         tic = time()
         eps_aux, eps, sig, info, scale_f = solver(bool_hybrid_test_list,
-            E_macro, alpha, Gamma_0, tol=1e-8, max_iter=1500, auto_scale=True, verbose=True)
+            E_macro, alpha, Gamma_0, tol=1e-6, max_iter=1500, auto_scale=True, verbose=True)
     
         print("Solver info:", info)  # ["num_steps"])
         print(f"{solver.__name__} solver time", time() - tic)
@@ -505,6 +506,9 @@ pv_grid.cell_data["eps_aux_zz"] = eps_aux_zz
 eps_zz = eps[...,2,2].ravel()
 pv_grid.cell_data["eps_zz"] = eps_zz
 
+# Extraction of the elastic energy
+W_elast = 0.5*jnp.einsum('...ij,...ij->...', sig, eps)
+pv_grid.cell_data["W_elast"] = W_elast.ravel()
 
 
 pv_grid.save(file_name.removesuffix(".vti") + "_results.vtk")
