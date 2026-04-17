@@ -26,9 +26,21 @@ from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor
 from eshelbyx.krylov_solver import KrylovAEMSolver
 from eshelbyx.solver import A2EMSolver, AEMSolver, MSSolver
 
-# commentaire
 current_folder = Path(__file__).parent.resolve()
 
+
+# Hybrid voxels treatment depending on the strategy
+strat_hybrid = "alpha"
+
+# Solver 
+solver_used = A2EMSolver
+
+# Discretization
+discretization_used = WillotDiscretization
+
+
+
+# Micro-structure created with microgen.py"
 file_name = "eshelbyx/results/Hashin_num_65.vti"
 grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
 
@@ -52,7 +64,7 @@ def piecewise_field_couple(field, value_map, markers):
 
 
 
-# Data extraction : 2 hybrid voxels being tested
+# Data extraction : 2 hybrid voxels being tested (in order to test the laminate hybridation strategy)
 bool_hybrid_test_data = pv_grid.cell_data["bool_hybrid_test"]
 bool_hybrid_test = jnp.array(bool_hybrid_test_data)
 
@@ -60,11 +72,11 @@ mask_test = (bool_hybrid_test == True)
 
 
 
-# Data extraction : ocal normal 
+# Data extraction : local normal 
 local_normal_data = pv_grid.cell_data["local_cartesian_normal"]
 local_normal = jnp.array(local_normal_data)
 
-#print("local normal test :", local_normal[mask_test]) # Verify the cartesian coordinates of the two tested voxels
+print("local normal test :", local_normal[mask_test]) # Verify the cartesian coordinates of the two tested voxels
 
 
 
@@ -72,10 +84,13 @@ local_normal = jnp.array(local_normal_data)
 # elasticity on a staggered grid, International Journal for Numerical Methods in Engineering, 105, 693–720. (2016)
 Rint = 0.2
 Rext = 0.4
-phi1 = (Rint/Rext)**3
-phi2 = 1 - phi1
+phi1 = (Rint/Rext)**3   # Volumic fraction of the central sphere in the set (central sphere + coating)
+phi2 = 1 - phi1     # Volumic fraction of the coating in the set (central sphere + coating)
 soft_center = True     # True : pore softer than the coating
-chi = 1e12
+chi = 1e12  # Material contrast between central sphere and coating
+
+
+# Material parameters
 Keff=1.0
 mueff=0.6
 
@@ -89,9 +104,6 @@ else:
 mu1 = 3*K1/5
 mu2 = 3*K2/5
 
-
-
-
 E_matrix = (9*Keff*mueff)/(3*Keff + mueff)
 
 E_pore = (9*K1*mu1)/(3*K1 + mu1)
@@ -99,15 +111,6 @@ E_incl = (9*K2*mu2)/(3*K2 + mu2)
 nu_matrix = (3*Keff - 2*mueff)/(2*(3*Keff + mueff))
 nu_pore = (3*K1 - 2*mu1)/(2*(3*K1 + mu1))
 nu_incl = (3*K2 - 2*mu2)/(2*(3*K2 + mu2))
-
-# Hybrid voxels treatment depending on the strategy
-strat_hybrid = "alpha"
-
-# Solver 
-solver_used = A2EMSolver
-
-# Discretization
-discretization_used = WillotDiscretization
 
 
 
@@ -430,7 +433,7 @@ alpha = lambda eps, scale=1.0: apply_alpha(eps, material_params, bool_hybrid_lis
 C_eps = lambda eps: constitutive_law(eps, material_params)
 
 
-# Macroscopic strain applied
+# Macroscopic strain E applied
 E_macro = SymmetricTensor2(array=jnp.asarray([1.0, 1.0, 1.0, 0.0, 0.0, 0.0]))
 E_macro = grid.broadcast_to_grid(E_macro)  # create a field on the grid
 

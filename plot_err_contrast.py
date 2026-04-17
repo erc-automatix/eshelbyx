@@ -22,7 +22,6 @@ from eshelbyx.discretization import (
     SchneiderDiscretization,
 )
 
-
 from eshelbyx.grid import load_vtk_grid
 from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
 from eshelbyx.krylov_solver import KrylovAEMSolver
@@ -30,6 +29,8 @@ from eshelbyx.solver import A2EMSolver, AEMSolver, MSSolver
 
 current_folder = Path(__file__).parent.resolve()
 
+
+# Micro-structure file for extracting the hybrid voxels
 file_name_num = f"eshelbyx/results/Hashin_num_65.vti"
 grid_num, pv_grid_num = load_vtk_grid(file_name_num, marker_name="phase")
 bool_hybrid_num = pv_grid_num['bool_hybrid']
@@ -37,14 +38,17 @@ mask_hybrid = (bool_hybrid_num == True)
 n_true = jnp.sum(mask_hybrid)
 
 
-file_types = ["1e-12","0001", "001", "01", "10", "100", "1000","1e12"]
-les_contrast_log = jnp.log10(jnp.array(([1e-12,0.001,0.01,0.1,1,10,100,1000, 1e12])))
+
+file_types = ["1e-12","0001", "001", "01", "10", "100", "1000","1e12"]  # Error files for the different contrast values
+les_contrast_log = jnp.log10(jnp.array(([1e-12,0.001,0.01,0.1,1,10,100,1000, 1e12])))   # Different contrast values
+
+
+# Empty arrays to save the results
 les_err_None_eps_aux = []
 les_err_Voigt_eps_aux = []
 les_err_Reuss_eps_aux = []
 les_err_laminate_eps_aux = []
 les_err_alpha_eps_aux = []
-
 
 les_err_None_sigma = []
 les_err_Voigt_sigma = []
@@ -65,9 +69,10 @@ les_err_laminate_W_elast = []
 les_err_alpha_W_elast = []
 
 
+# Loop for each contrast value
 for ftype in file_types:
     
-    file_name = f"eshelbyx/results/err_grille_all_{ftype}.vti"
+    file_name = f"eshelbyx/results/err_grille_all_{ftype}.vti"  # Error file
     grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
     phase = pv_grid["phase"]
     
@@ -147,13 +152,18 @@ for ftype in file_types:
     les_err_Reuss_W_elast.append(sum_err_Reuss_W_elast)
     les_err_laminate_W_elast.append(sum_err_laminate_W_elast)
     les_err_alpha_W_elast.append(sum_err_alpha_W_elast)
+ 
     
-  
+ 
+    
+# ------------------------------------------------------------------
+# Adding "0" value to the error list for contrast=1
+# ------------------------------------------------------------------
+
 def insert_zero(arr, idx):
     arr = jnp.array(arr)
     return jnp.concatenate([arr[:idx], jnp.array([0.0]), arr[idx:]])
 
-# Adding "0" to the error list for contrast=1
 les_err_None_eps_aux = insert_zero(les_err_None_eps_aux, 4)
 les_err_Voigt_eps_aux = insert_zero(les_err_Voigt_eps_aux, 4)
 les_err_Reuss_eps_aux = insert_zero(les_err_Reuss_eps_aux, 4)
@@ -178,6 +188,12 @@ les_err_Reuss_W_elast = insert_zero(les_err_Reuss_W_elast, 4)
 les_err_laminate_W_elast = insert_zero(les_err_laminate_W_elast, 4)
 les_err_alpha_W_elast = insert_zero(les_err_alpha_W_elast, 4)
 
+
+
+
+# --------------------------
+# Figures
+# --------------------------
 
 # Plot error eps aux
 plt.figure(figsize=(6,4))  

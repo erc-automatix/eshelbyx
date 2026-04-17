@@ -45,20 +45,22 @@ Nx, Ny, Nz = pv_grid.dimensions[0]-1, pv_grid.dimensions[1]-1, pv_grid.dimension
 #Nx_64, Ny_64, Nz_64 = pv_grid_64.dimensions[0]-1, pv_grid_64.dimensions[1]-1, pv_grid_64.dimensions[2]-1
 #Nx_32, Ny_32, Nz_32 = pv_grid_32.dimensions[0]-1, pv_grid_32.dimensions[1]-1, pv_grid_32.dimensions[2]-1
 #Nx_16, Ny_16, Nz_16 = pv_grid_16.dimensions[0]-1, pv_grid_16.dimensions[1]-1, pv_grid_16.dimensions[2]-1
-bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)
+
+bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)  # Boundaries of the domain
 
 #Nloc = jnp.array([1,2,3])
 Nloc = 1
 
-# Extraction of the voxels at y=0 and z=0 over the x coordinate only + refinement
+
+
+# --------------------------------------------------------------------------------------
+# Extraction of the voxels at x=0 and y=0 over the z coordinate only + refinement
+# --------------------------------------------------------------------------------------
 centers = pv_grid.cell_centers().points  
-
-
 
 x_c = centers[:, 0]
 y_c = centers[:, 1]
 z_c = centers[:, 2]
-
 
 tol = 1e-6
 #shift = 1/64/2
@@ -66,108 +68,6 @@ shift = 0
 
 mask_center = (jnp.abs(y_c-shift) < tol) & (jnp.abs(x_c-shift) < tol)
 les_z = z_c[mask_center]
-
-
-
-
-
-#-----------------------------------------------------------
-# Analytical solution
-#-----------------------------------------------------------
-
-N = Nx*10    # Number of plotted points
-
-Rint = 0.2
-Rext = 0.4
-coating_thickness = Rext-Rint
-
-# Material parameters from Matti Schneider's paper : M. Schneider et al. Computational homogenization of 
-# elasticity on a staggered grid, International Journal for Numerical Methods in Engineering, 105, 693–720. (2016)
-phi1 = (Rint/Rext)**3
-phi2 = 1 - phi1
-soft_center = True     # True : pore softer than the coating
-chi = 1e12
-Keff=1.0
-mueff=0.6
-
-if soft_center==True:
-    K1 = (9 + (5*((1/chi)-1)*phi2))*Keff / (9 - (4*(1-chi)*phi2))
-    K2 = K1*chi
-else:
-    K1 = (9 - (5*(1-chi)*phi2))*Keff / (9 + (4*((1/chi)-1)*phi2))
-    K2 = K1/chi
-
-mu1 = 3*K1/5
-mu2 = 3*K2/5
-
-aeff = 1.0
-a2 = (3*Keff + 4*mu2)/(3*K2 + 4*mu2)
-b2 = (3*((Rint+coating_thickness)**3)*(K2-Keff))/(3*K2 + 4*mu2)
-a1 = a2 + (b2/(Rint**3))
-
-
-
-# Radius computation
-x = np.linspace(bounds[0], bounds[1], N)
-y = np.linspace(bounds[2], bounds[3], N)
-z = np.linspace(bounds[4], bounds[5], N)
-
-
-
-# Minimalist computation
-y = 0
-z = 0
-
-
-def sigma(x):
-    r = np.sqrt(x**2)
-    r_safe = np.maximum(r,1e-12)
-    
-    if r<=Rint: # pore
-        sigma_rr = 3*K1*a1
-        sigma_tt = sigma_rr
-        sigma_pp = sigma_rr
-        
-    elif r>Rint and r<=Rext: # coating
-        sigma_rr = 3*K2*a2 - (4*mu2*b2/r_safe**3)
-        sigma_tt = 3*K2*a2 + (2*mu2*b2/r_safe**3)
-        sigma_pp = sigma_tt
-        
-    else :  # matrix
-        sigma_rr = 3*Keff*aeff
-        sigma_tt = sigma_rr
-        sigma_pp = sigma_rr
-    
-    
-    # Spherical -> cartesian
-    theta = np.arccos(z/r_safe)
-    phi = np.atan2(y,x)
-
-    st = np.sin(theta)
-    ct = np.cos(theta)
-    sp = np.sin(phi)
-    cp = np.cos(phi)
-
-    er = np.stack((st*cp, st*sp, ct), axis=-1)
-    et = np.stack((ct*cp, ct*sp, -st), axis=-1)
-    ep = np.stack((-sp, cp, np.zeros_like(r)), axis=-1)
-    
-    sigma_xx = sigma_rr*er[...,0]*er[...,0] + sigma_tt*et[...,0]*et[...,0] + sigma_pp*ep[...,0]*ep[...,0]
-    sigma_yy = sigma_rr*er[...,1]*er[...,1] + sigma_tt*et[...,1]*et[...,1] + sigma_pp*ep[...,1]*ep[...,1]
-    sigma_zz = sigma_rr*er[...,2]*er[...,2] + sigma_tt*et[...,2]*et[...,2] + sigma_pp*ep[...,2]*ep[...,2]
-    
-    sigma_xy = sigma_rr*er[...,0]*er[...,1] + sigma_tt*et[...,0]*et[...,1] + sigma_pp*ep[...,0]*ep[...,1]
-    sigma_xz = sigma_rr*er[...,0]*er[...,2] + sigma_tt*et[...,0]*et[...,2] + sigma_pp*ep[...,0]*ep[...,2]
-    sigma_yz = sigma_rr*er[...,1]*er[...,2] + sigma_tt*et[...,1]*et[...,2] + sigma_pp*ep[...,1]*ep[...,2]
-    
-    return sigma_xx, sigma_yy, sigma_zz, sigma_xy, sigma_xz, sigma_yz
-
-
-
-
-#les_sigma_zz_an = np.array([sigma(x)[2] for x in les_x])
-
-
 
 
 
@@ -186,7 +86,6 @@ file_map = {
     
 
 # final k0 obtained with the A2EM solver ( = 1.0 in other cases) depending on the hybridation strategy
-
 """
 # chi = 1000, soft
 scale_f_alpha = 5.07512
@@ -260,246 +159,15 @@ scales_map = {
 }
 
 
-E_matrix = (9*Keff*mueff)/(3*Keff + mueff)
-E_pore = (9*K1*mu1)/(3*K1 + mu1)
-E_incl = (9*K2*mu2)/(3*K2 + mu2)
-nu_matrix = (3*Keff - 2*mueff)/(2*(3*Keff + mueff))
-nu_pore = (3*K1 - 2*mu1)/(2*(3*K1 + mu1))
-nu_incl = (3*K2 - 2*mu2)/(2*(3*K2 + mu2))
 
-# Material parameters mapping
-E_map = {0: E_matrix, 1: E_pore, 2: E_incl}
-nu_map = {0: nu_matrix, 1: nu_pore, 2: nu_incl}
-
-
-# Solver 
-solver_used = A2EMSolver
-
-# Discretization
-discretization_used = WillotDiscretization
-
-
-# Reference medium depending on the solver being used
-if solver_used == AEMSolver or solver_used == A2EMSolver or solver_used == KrylovAEMSolver :
-    # Reference medium for the AEM and A2EM solvers
-    E0 = 1.0
-    nu0 = 0.3
-    
-elif solver_used == MSSolver :
-    # Reference medium for MS solver
-    E0 = (E_incl+E_pore)/2
-    nu0 = (nu_incl+nu_pore)/2
-
-lambda_0, mu0 = E0 * nu0 / (1 + nu0) / (1 - 2 * nu0), E0 / 2 / (1 + nu0)
-C0 = IsotropicTensor4(lambda_0 + 2 / 3 * mu0, mu0)
-
-def piecewise_field(field, value_map, grid):
-    for index, value in value_map.items():
-        field = field.at[grid.markers == index, ...].set(value)
-    return field
-
-
-"""
-def main_plot(strat_hybrid, scale_f):
-    file_name = file_map.get(strat_hybrid)
-    grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
-
-    Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=discretization_used(grid))
-
-
-    # Extraction of the voxels at y=0 and z=0 over the x coordinate only + refinement
-    centers = pv_grid.cell_centers().points  
-    
-    #x_c = centers[:, 0]
-    y_c = centers[:, 1]
-    z_c = centers[:, 2]
-    
-    tol = 1e-6
-    
-
-    x_line_refined = jnp.linspace(bounds[0], bounds[1], Nx*Nloc)
-    
-    
-    
-    # Extraction of the corresponding phases + refinement
-    conditions = [
-        (x_line_refined > -Rint) & (x_line_refined < Rint),
-        ((x_line_refined > -Rext) & (x_line_refined < -Rint)) |
-        ((x_line_refined > Rint) & (x_line_refined < Rext)),
-    ]
-    
-    
-    
-    # Association of the corresonding material parameters
-    
-    choices_E = [E_pore, E_incl]
-    E_line_refined = jnp.select(conditions, choices_E, default=E_matrix)
-    
-    choices_nu = [nu_pore, nu_incl]
-    nu_line_refined = jnp.select(conditions, choices_nu, default=nu_matrix)
-    
-    material_params_ref = (E_line_refined, nu_line_refined)
-    
-    
-    
-    # Extraction of the corresponding auxiliar strain + refinement
-    coarse_strain_aux = pv_grid.cell_data["strain_aux"]
-    strain_aux_line = coarse_strain_aux[mask_center]
-    strain_aux_line_refined_3d = jnp.repeat(strain_aux_line, Nloc, axis=0)
-    
-    
-    
-    # Computation of the refined strain with alpha
-    def _apply_alpha_ref(eps, material_params_ref, C0):
-            
-        E, nu = material_params_ref
-                
-        lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
-        mu = E / 2 / (1 + nu)
-        C = IsotropicTensor4(lmbda + 2 / 3 * mu, mu)
-    
-        iC = (C + C0).inv
-        alp = iC @ (C0 * 2.0)
-        sig = alp.eval_jvp(eps)  # here alp is a IsotropicTensor4
-        return SymmetricTensor2(tensor=sig)
-    
-    @eqx.filter_jit
-    def apply_alpha_ref(eps, params, C0):
-        eps_flatten = jnp.asarray(eps).reshape(-1, 3, 3)
-        sig_tensor = jax.vmap(_apply_alpha_ref, in_axes=(0, 0, None))(eps_flatten, params, C0)
-        return sig_tensor.tensor.reshape(eps.shape)
-    
-    alpha_ref = lambda eps, scale=scale_f : apply_alpha_ref(eps, material_params_ref, C0 * scale)
-    
-    
-    strain_line_refined_3d = alpha_ref(strain_aux_line_refined_3d).reshape((-1, 9), order="F")
-    
-    
-    
-    # Computation of the refined stress
-    strain_aux_line_refined_bis = strain_aux_line_refined_3d.reshape((Nx*Nloc, 3, 3))
-    strain_line_refined_bis = strain_line_refined_3d.reshape((Nx*Nloc, 3, 3))
-    stress_line_refined_3d = scale_f*Gamma_0.apply_C0(2.0 * strain_aux_line_refined_bis - strain_line_refined_bis)
-    
-    
-    # Amplitude of the auxiliar strain
-    norm_strain_aux = jnp.linalg.norm(strain_aux_line_refined_bis, axis=(1,2))
-    
-    # Amplitude of the strain
-    norm_strain = jnp.linalg.norm(strain_line_refined_bis, axis=(1,2))
-    
-    
-    # Extraction of the zz component of the stress
-    stress_ref_zz = stress_line_refined_3d[..., 0, 0]
-    stress_ref_zz_flat = jnp.reshape(stress_ref_zz, (-1,))
-    
-    return x_line_refined, stress_ref_zz_flat, norm_strain_aux, norm_strain
-
-
-les_x_None, stress_ref_zz_None, norm_strain_aux_None, norm_strain_None = main_plot("None",scale_f_None)
-les_x_Voigt, stress_ref_zz_Voigt, norm_strain_aux_Voigt, norm_strain_Voigt = main_plot("Voigt",scale_f_Voigt)
-les_x_Reuss, stress_ref_zz_Reuss, norm_strain_aux_Reuss, norm_strain_Reuss = main_plot("Reuss",scale_f_Reuss)
-les_x_alpha, stress_ref_zz_alpha, norm_strain_aux_alpha, norm_strain_alpha = main_plot("alpha",scale_f_alpha)
-les_x_laminate, stress_ref_zz_laminate, norm_strain_aux_laminate, norm_strain_laminate = main_plot("laminate",scale_f_laminate)
-
-
-
-
-# Plot norm Frobenius strain aux
-plt.figure(figsize=(6,4))
-plt.plot(les_x, norm_strain_aux_None, label=r"$\|\varepsilon_{aux}^{None}\|$")
-plt.plot(les_x, norm_strain_aux_Voigt, label=r"$\|\varepsilon_{aux}^{Voigt}\|$")
-plt.plot(les_x, norm_strain_aux_Reuss, label=r"$\|\varepsilon_{aux}^{Reuss}\|$")
-plt.plot(les_x, norm_strain_aux_alpha, label=r"$\|\varepsilon_{aux}^{\alpha}\|$")
-plt.plot(les_x, norm_strain_aux_laminate, label=r"$\|\varepsilon_{aux}^{laminate}\|$")
-plt.axvline(x=-0.4, color='grey', linestyle='--')
-plt.axvline(x=-0.2, color='grey', linestyle='--')
-plt.axvline(x=0.2, color='grey', linestyle='--')
-plt.axvline(x=0.4, color='grey', linestyle='--')
-plt.xlabel('x')
-plt.ylabel(r"$\|\varepsilon_{aux}\|$")
-plt.grid(True)
-plt.legend()
-plt.grid(True)
-plt.legend()
-plt.show()
-
-
-# Plot norm Frobenius strain
-plt.figure(figsize=(6,4))
-plt.plot(les_x, norm_strain_None, label=r"$\|\varepsilon^{None}\|$")
-plt.plot(les_x, norm_strain_Voigt, label=r"$\|\varepsilon^{Voigt}\|$")
-plt.plot(les_x, norm_strain_Reuss, label=r"$\|\varepsilon^{Reuss}\|$")
-plt.plot(les_x, norm_strain_alpha, label=r"$\|\varepsilon^{\alpha}\|$")
-plt.plot(les_x, norm_strain_laminate, label=r"$\|\varepsilon^{laminate}\|$")
-plt.axvline(x=-0.4, color='grey', linestyle='--')
-plt.axvline(x=-0.2, color='grey', linestyle='--')
-plt.axvline(x=0.2, color='grey', linestyle='--')
-plt.axvline(x=0.4, color='grey', linestyle='--')
-plt.xlabel('x')
-plt.ylabel(r"$\|\varepsilon\|$")
-plt.grid(True)
-plt.legend()
-plt.grid(True)
-plt.legend()
-plt.show()
-
-
-# Plot stress zz general view
-plt.figure(figsize=(6,4))
-plt.plot(les_x, les_sigma_zz_an, label=r'$\sigma_{zz}^{an}$', color='black', linestyle='--', linewidth=1)
-plt.xlabel('x')
-plt.ylabel(r'$\sigma_{zz}$')
-plt.grid(True)
-plt.legend()
-plt.plot(les_x, stress_ref_zz_None, label=r"$\sigma_{zz}^{None}$")
-plt.plot(les_x, stress_ref_zz_Voigt, label=r"$\sigma_{zz}^{Voigt}$")
-plt.plot(les_x, stress_ref_zz_Reuss, label=r"$\sigma_{zz}^{Reuss}$")
-plt.plot(les_x, stress_ref_zz_alpha, label=r"$\sigma_{zz}^{\alpha}$")
-plt.plot(les_x, stress_ref_zz_laminate, label=r"$\sigma_{zz}^{laminate}$")
-plt.axvline(x=-0.4, color='grey', linestyle='--')
-plt.axvline(x=-0.2, color='grey', linestyle='--')
-plt.axvline(x=0.2, color='grey', linestyle='--')
-plt.axvline(x=0.4, color='grey', linestyle='--')
-plt.grid(True)
-plt.legend()
-plt.show()
-
-
-# Plot stress zz zoomed view
-plt.figure(figsize=(6,4))
-plt.plot(les_x, les_sigma_zz_an, label=r'$\sigma_{zz}^{an}$', color='black', linestyle='--', linewidth=1)
-plt.xlabel('x')
-plt.ylabel(r'$\sigma_{zz}$')
-plt.grid(True)
-plt.legend()
-plt.plot(les_x, stress_ref_zz_None, label=r"$\sigma_{zz}^{None}$")
-plt.plot(les_x, stress_ref_zz_Voigt, label=r"$\sigma_{zz}^{Voigt}$")
-plt.plot(les_x, stress_ref_zz_Reuss, label=r"$\sigma_{zz}^{Reuss}$")
-plt.plot(les_x, stress_ref_zz_alpha, label=r"$\sigma_{zz}^{\alpha}$")
-plt.plot(les_x, stress_ref_zz_laminate, label=r"$\sigma_{zz}^{laminate}$")
-plt.axvline(x=-0.4, color='grey', linestyle='--')
-plt.axvline(x=-0.2, color='grey', linestyle='--')
-plt.axvline(x=0.2, color='grey', linestyle='--')
-plt.axvline(x=0.4, color='grey', linestyle='--')
-ymin, ymax = plt.ylim()
-#plt.ylim(3, ymax)
-plt.xlim(0.1,0.3)
-plt.grid(True)
-plt.legend()
-plt.show()
-"""
-
-
-
-
-
+# Material parameters of the reference medium 
 E0 = 1.0
 nu0 = 0.3
 K0 = E0 / (3 * (1 - 2*nu0))
 mu0 = E0 / (2 * (1 + nu0))
 
 
+# Function used to refine the 32*32*32 or 16*16*16 grids in order to compare the results with the analytical 64*64*64 grid
 def refine_pyvista_grid(grid, Nloc):
     nx, ny, nz = grid.dimensions
     sx, sy, sz = grid.spacing
@@ -523,33 +191,37 @@ def refine_pyvista_grid(grid, Nloc):
 
     return refined
 
+
+
 # ------------------------------------------------------------------------------------------
-# L2 adimensional error on the whole domain (with paraview export on a single file)
+# Data extraction : analytical solution
 # ------------------------------------------------------------------------------------------
 file_types = ["laminate", "alpha", "None", "Voigt", "Reuss"]
-#file_types = ["alpha", "None", "Voigt", "Reuss"]
 
-file_name_an = "eshelbyx/results/Hashin_an_65.vti"
-
-
+file_name_an = "eshelbyx/results/Hashin_an_65.vti"  # Analytical solution
 grid_an, pv_grid_an = load_vtk_grid(file_name_an, marker_name="phase")
 
+# Data extraction : analytical stress components
 values_sigma_zz_an = pv_grid_an['sigma_zz_an']
 values_sigma_xx_an = pv_grid_an['sigma_xx_an']
 values_sigma_yy_an = pv_grid_an['sigma_yy_an']
 
-values_sigma_trace_an = values_sigma_xx_an + values_sigma_yy_an + values_sigma_zz_an
+values_sigma_trace_an = values_sigma_xx_an + values_sigma_yy_an + values_sigma_zz_an    # tr(sigma)
 
+# Data extraction : analytical strain zz component
 values_eps_zz_an = pv_grid_an['eps_zz_an']
 
+# Data extraction : analytical elastic energy
 values_W_elast_an = pv_grid_an['W_elast']
 
 
+
+# err_grid : file to store the error results
 err_grid = pv_grid_an.copy()
 
 
+# Compute and plot err on sigma zz
 plt.figure(figsize=(6,4))
-# Plot sigma
 for ftype in file_types:
     
     file_name_num = f"eshelbyx/results/Hashin_num_65_results_{ftype}.vtk"
@@ -597,22 +269,19 @@ for ftype in file_types:
     """
     
     sigma_zz_max = jnp.max(values_sigma_zz_an)
-    W_elast_max = jnp.max(values_W_elast_an)
     
     err_sigma = jnp.abs((values_sigma_zz_num - values_sigma_zz_an) / (sigma_zz_max))*100
     #err_sigma_64 = jnp.abs((values_sigma_zz_num_64 - values_sigma_zz_an) / (sigma_zz_max))*100
     #err_sigma_32 = jnp.abs((fine_sigma_zz_32_array - values_sigma_zz_an) / (sigma_zz_max))*100
     #err_sigma_16 = jnp.abs((fine_sigma_zz_16_array - values_sigma_zz_an) / (sigma_zz_max))*100
-    err_W_elast = jnp.abs((values_W_elast_num - values_W_elast_an) / (W_elast_max))*100
     
     err_grid[f'err_{ftype}_sigma'] = err_sigma
     #err_grid[f'err_{ftype}_sigma_64'] = err_sigma_64
     #err_grid[f'err_{ftype}_sigma_32'] = err_sigma_32
     #err_grid[f'err_{ftype}_sigma_16'] = err_sigma_16
-    err_grid[f'err_{ftype}_W_elast'] = err_W_elast
     
     
-    # Plot error on sigma zz along x
+    # Plot error on sigma zz along z
     les_err_plot_sigma = err_sigma[mask_center]
     #les_err_plot_sigma_64 = err_sigma_64[mask_center]
     #les_err_plot_sigma_32 = err_sigma_32[mask_center]
@@ -634,7 +303,9 @@ plt.legend()
 plt.show()  
 
 
-# Plot eps  
+
+
+# Compute and plot err on eps zz 
 plt.figure(figsize=(6,4))  
 for ftype in file_types:
     
@@ -668,7 +339,8 @@ plt.legend()
 plt.show()      
     
 
-# Plot eps aux
+
+# Compute and plot err on eps aux zz
 plt.figure(figsize=(6,4))  
 for ftype in file_types:
     K0_f = K0*scales_map[ftype]
@@ -691,7 +363,7 @@ for ftype in file_types:
     err_grid[f'err_{ftype}_eps_aux'] = err_eps_aux
     
     
-    # Plot error on eps aux zz along x
+    # Plot error on eps aux zz along z
     les_err_plot_eps_aux = err_eps_aux[mask_center]
     plt.plot(les_z, les_err_plot_eps_aux, label=fr'$err_{{L_2}}(\varepsilon_{{\alpha,zz}}^{{{ftype}}})$')
 
@@ -707,8 +379,10 @@ plt.legend()
 plt.show()
 
 
+
+
+# Compute and plot err on W_elast
 plt.figure(figsize=(6,4))
-# Plot Welast
 for ftype in file_types:
     
     file_name_num = f"eshelbyx/results/Hashin_num_65_results_{ftype}.vtk"
@@ -726,12 +400,10 @@ for ftype in file_types:
     err_grid[f'err_{ftype}_W_elast'] = err_W_elast
     
     
-    # Plot error on sigma zz along x
+    # Plot error on W_elast along z
     les_err_plot_W_elast = err_W_elast[mask_center]
     plt.plot(les_z, les_err_plot_W_elast, label=fr'$err_{{L_2}}(W_{{elast}}^{{{ftype}}})$')
-    #plt.plot(les_z, les_err_plot_sigma_64, label='N=64')
-    #plt.plot(les_z, les_err_plot_sigma_32, label='N=32')
-    #plt.plot(les_z, les_err_plot_sigma_16, label='N=16')
+
     
 plt.axvline(x=-0.4, color='grey', linestyle='--')
 plt.axvline(x=-0.2, color='grey', linestyle='--')
@@ -747,11 +419,9 @@ plt.show()
 
 
 
-
-# Saving
+# Saving the results on a single file
 output_name = "eshelbyx/results/err_grille_all.vti"
 err_grid.save(output_name)
-
 
 print(f"Saved: {output_name}")
 
