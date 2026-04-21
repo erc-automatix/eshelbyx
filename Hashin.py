@@ -41,7 +41,7 @@ discretization_used = WillotDiscretization
 
 
 # Micro-structure created with microgen.py"
-file_name = "eshelbyx/results/Hashin_num_65.vti"
+file_name = "eshelbyx/results/Hashin_num_16.vti"
 grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
 
 
@@ -64,19 +64,10 @@ def piecewise_field_couple(field, value_map, markers):
 
 
 
-# Data extraction : 2 hybrid voxels being tested (in order to test the laminate hybridation strategy)
-bool_hybrid_test_data = pv_grid.cell_data["bool_hybrid_test"]
-bool_hybrid_test = jnp.array(bool_hybrid_test_data)
-
-mask_test = (bool_hybrid_test == True)
-
-
 
 # Data extraction : local normal 
 local_normal_data = pv_grid.cell_data["local_cartesian_normal"]
 local_normal = jnp.array(local_normal_data)
-
-print("local normal test :", local_normal[mask_test]) # Verify the cartesian coordinates of the two tested voxels
 
 
 
@@ -87,7 +78,7 @@ Rext = 0.4
 phi1 = (Rint/Rext)**3   # Volumic fraction of the central sphere in the set (central sphere + coating)
 phi2 = 1 - phi1     # Volumic fraction of the coating in the set (central sphere + coating)
 soft_center = True     # True : pore softer than the coating
-chi = 1e12  # Material contrast between central sphere and coating
+chi = 1000  # Material contrast between central sphere and coating
 
 
 # Material parameters
@@ -244,22 +235,22 @@ def P_func(n):
     P4 = 0.5 * (term1 + term2 + term3 + term4) \
          - jnp.einsum('i,j,l,m->ijlm', n, n, n, n)
 
-    # Mapping vers Voigt (6x6)
-    voigt = jnp.array([
+    # Order (6x6)
+    order = jnp.array([
         [0,0],
         [1,1],
         [2,2],
-        [1,2],
+        [0,1],
         [0,2],
-        [0,1]
+        [1,2]
     ])
 
     # Construction matrice 6x6
     P_array = P4[
-        voigt[:,0][:,None],
-        voigt[:,1][:,None],
-        voigt[:,0][None,:],
-        voigt[:,1][None,:]
+        order[:,0][:,None],
+        order[:,1][:,None],
+        order[:,0][None,:],
+        order[:,1][None,:]
     ]
 
     return SymmetricTensor4(array=P_array)
@@ -267,8 +258,9 @@ def P_func(n):
 
 
 
+
 # Computation and application of the alpha 4th-order tensor depending on the hybridation strategy for hybrid voxels
-def _apply_alpha(eps, material_params, bool_hybrid_list, bool_hybrid_test_list, material_params_int, material_params_ext, volumic_fraction_list, C0, local_normal, C0_aniso):
+def _apply_alpha(eps, material_params, bool_hybrid_list, material_params_int, material_params_ext, volumic_fraction_list, C0, local_normal, C0_aniso):
     
     def normal_branch(_):
         # Usual computation of alpha for non-hybrid voxels
@@ -414,22 +406,21 @@ def _apply_alpha(eps, material_params, bool_hybrid_list, bool_hybrid_test_list, 
     
 
 @eqx.filter_jit
-def apply_alpha(eps, params,bool_hybrid, bool_hybrid_test, params_int, params_ext, phi,  C0, local_normal, C0_aniso):
+def apply_alpha(eps, params,bool_hybrid, params_int, params_ext, phi,  C0, local_normal, C0_aniso):
     eps_flatten = jnp.asarray(eps).reshape(-1, 3, 3)
-    sig_tensor = jax.vmap(_apply_alpha, in_axes=(0, 0, 0, 0, 0, 0, 0, None, 0, None))(eps_flatten, params, bool_hybrid, bool_hybrid_test, params_int, params_ext, phi, C0, local_normal, C0_aniso)
+    sig_tensor = jax.vmap(_apply_alpha, in_axes=(0, 0, 0, 0, 0, 0, None, 0, None))(eps_flatten, params, bool_hybrid, params_int, params_ext, phi, C0, local_normal, C0_aniso)
     return sig_tensor.tensor.reshape(eps.shape)
 
 
 
 material_params = (E.ravel(), nu.ravel())
 bool_hybrid_list = bool_hybrid.ravel()
-bool_hybrid_test_list = bool_hybrid_test.ravel()
 material_params_int = (E_int.ravel(), nu_int.ravel())
 material_params_ext = (E_ext.ravel(), nu_ext.ravel())
 volumic_fraction_list = volumic_fraction.ravel()
 
 
-alpha = lambda eps, scale=1.0: apply_alpha(eps, material_params, bool_hybrid_list, bool_hybrid_test_list, material_params_int, material_params_ext, volumic_fraction_list,  C0 * scale, local_normal, C0_aniso*scale)
+alpha = lambda eps, scale=1.0: apply_alpha(eps, material_params, bool_hybrid_list, material_params_int, material_params_ext, volumic_fraction_list,  C0 * scale, local_normal, C0_aniso*scale)
 C_eps = lambda eps: constitutive_law(eps, material_params)
 
 
@@ -470,8 +461,7 @@ elif solver_used == A2EMSolver :
     # A2EM solver
     for solver in [A2EMSolver]:
         tic = time()
-        eps_aux, eps, sig, info, scale_f = solver(bool_hybrid_test_list,
-            E_macro, alpha, Gamma_0, tol=1e-6, max_iter=1500, auto_scale=True, verbose=True)
+        eps_aux, eps, sig, info, scale_f = solver(E_macro, alpha, Gamma_0, tol=1e-6, max_iter=1500, auto_scale=True, verbose=True)
     
         print("Solver info:", info)  # ["num_steps"])
         print(f"{solver.__name__} solver time", time() - tic)
@@ -499,7 +489,6 @@ pv_grid.cell_data["stress"] = sig.reshape((-1, 3, 3))
 # Extraction of the zz component of the stress
 sigma_zz = sig[...,2,2].ravel()
 pv_grid.cell_data["stress_zz"] = sigma_zz
-print("sigma zz test  :",sigma_zz[mask_test])
 
 # Extraction of the zz component of the auxiliar strain
 eps_aux_zz = eps_aux[...,2,2].ravel()
