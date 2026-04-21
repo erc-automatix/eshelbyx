@@ -8,7 +8,6 @@ from eshelbyx.tensors import SymmetricTensor2
 # @eqx.debug.assert_max_traces(max_traces=1)
 @eqx.filter_jit
 def A2EMSolver(
-    bool_hybrid_test_list,
     E_macro,
     alpha,
     Gamma_0,
@@ -19,7 +18,6 @@ def A2EMSolver(
     verbose=True
 ):
 
-    mask_test = (bool_hybrid_test_list == True)
 
     
     # ------------------------
@@ -41,54 +39,8 @@ def A2EMSolver(
     # ------------------------
     def step(carry):
         it, X, eps_aux, W, scale, Delta = carry
-        
-
-        aX = alpha(X, scale)
-        #mask_diag = jnp.eye(3)
-        #aX_diag = aX * mask_diag
-        
-        
-        """
-        # Debug
-        idx = jnp.where(mask_test, size=2)[0]
-        aX_xx = aX[...,0, 0].flatten()
-        vals_aX_xx = aX_xx[idx]
-        jax.debug.print("aXxx test boucle : {}", vals_aX_xx)
-        
-        aX_yy = aX[...,1, 1].flatten()
-        vals_aX_yy = aX_yy[idx]
-        jax.debug.print("aXyy test boucle : {}", vals_aX_yy)
-        
-        aX_zz = aX[...,2, 2].flatten()
-        vals_aX_zz = aX_zz[idx]
-        jax.debug.print("aXzz test boucle : {}", vals_aX_zz)
-        
-        aX_xy = aX[...,0, 1].flatten()
-        vals_aX_xy = aX_xy[idx]
-        jax.debug.print("aXxy test boucle : {}", vals_aX_xy)
-        
-        aX_yz = aX[...,1, 2].flatten()
-        vals_aX_yz = aX_yz[idx]
-        jax.debug.print("aXyz test boucle : {}", vals_aX_yz)
-        
-        
-        aX_xz = aX[...,0, 2].flatten()
-        vals_aX_xz = aX_xz[idx]
-        jax.debug.print("aXxz test boucle : {}", vals_aX_xz)
-        """
-        
-        
+        aX = alpha(X, scale)             
         Y = projection_on_D(aX)
-        
-        """
-        # Debug
-        Y_zz = Y[...,2, 2].flatten()
-        idx = jnp.where(mask_test, size=2)[0]
-        vals_Y = Y_zz[idx]
-        jax.debug.print("Yzz test boucle : {}", vals_Y)
-        """
-        
-        
         
         Z = aX - 2.0 * Y + 2 * W / scale
 
@@ -102,25 +54,7 @@ def A2EMSolver(
 
         sig_new = scale * Gamma_0.apply_C0(2.0 * eps_aux_new - eps_new)
         
-        """
-        # Debug
-        sig_new_zz = sig_new[...,2, 2].flatten()
-        idx = jnp.where(mask_test, size=2)[0]
-        vals_sig = sig_new_zz[idx]
-        jax.debug.print("sigzz test boucle : {}", vals_sig)
-        """
-        
-        
-        
         W_new = (1 - 2 * lam_new) * W + lam_new * scale * Y
-        
-        """
-        # Debug
-        W_new_zz = W_new[...,2, 2].flatten()
-        idx = jnp.where(mask_test, size=2)[0]
-        vals_W = W_new_zz[idx]
-        jax.debug.print("Wzz test boucle : {}", vals_W)
-        """
         
 
         eps0 = Gamma_0.apply_C0_inv(sig_new)
