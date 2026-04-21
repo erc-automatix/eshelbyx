@@ -1,7 +1,7 @@
 import pyvista as pv
 import numpy as np
 import jax.numpy as jnp
-from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
+#from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
 
 
 
@@ -180,12 +180,12 @@ def main_3_phases():
     
 
 def main_Hashin_an():
-    """
-    Analytical solution for the Hashin's coated sphere problem
-    """
     
-    N = 16  # Number of voxels in each direction 
-    Nloc = 5    # For each voxel, we use Nloc points in each direction to evaluate the fields (eps, sigma) and then take the mean value for the voxel
+    """
+    Analytical solution for the Hashin's coated sphere
+    """
+    N = 16
+    Nloc = 5
     Rint = 0.2
     Rext = 0.4
     coating_thickness = Rext-Rint
@@ -195,10 +195,7 @@ def main_Hashin_an():
     phi1 = (Rint/Rext)**3
     phi2 = 1 - phi1
     soft_center = True     # True : pore softer than the coating
-    chi = 1000  # Material contrast between the central sphere and the coating
-    
-    
-    # Material parameters
+    chi = 1000
     Keff=1.0
     mueff=0.6
 
@@ -213,14 +210,13 @@ def main_Hashin_an():
     mu2 = 3*K2/5
     
     
-    # Auxiliar parameters coming from the analytical resolution
     aeff = 1.0
     a2 = (3*Keff + 4*mu2)/(3*K2 + 4*mu2)
     b2 = (3*((Rint+coating_thickness)**3)*(K2-Keff))/(3*K2 + 4*mu2)
     a1 = a2 + (b2/(Rint**3))
     
 
-    bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)  # Boundaries of the domain
+    bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)
     grid_coarse = make_grid(bounds, (N + 1, N + 1, N + 1))
 
     pore = pv.Sphere(radius=Rint, center=(0,0,0)).triangulate()   # Pore geometry in Pyvista
@@ -236,11 +232,11 @@ def main_Hashin_an():
     
     
     # --------------------------------------------------------
-    # Phase coarse analytical
+    # Phase coarse analytique
     # --------------------------------------------------------
     phase_coarse = np.zeros((N, N, N), dtype=np.uint8)
     
-    # Coordinates of the voxels centers
+    # Coordonnées des centres des voxels
     dx = (bounds[1] - bounds[0]) / N
     xc = bounds[0] + (np.arange(N) + 0.5) * dx
     yc = bounds[2] + (np.arange(N) + 0.5) * dx
@@ -256,21 +252,30 @@ def main_Hashin_an():
     grid_coarse.cell_data["phase"] = phase_coarse.flatten()
     
     
-    # Saving the field results
+    
+    # --------------------
+    # Grille coarse directe
+    # --------------------    
+    dx = (bounds[1] - bounds[0]) / N
+    
+    # Stockage résultat
     sigma_coarse = np.zeros((N, N, N, 3, 3))
+    
     eps_coarse = np.zeros((N, N, N, 3, 3))
     
-    # Loop on each voxel indexed by i,j,k
+    W_elast_coarse = np.zeros((N, N, N))
+    
+    # Boucle sur voxels coarse
     for i in range(N):
         for j in range(N):
             for k in range(N):
     
-                # Coordinate of the min corner of the voxel
+                # Coordonnées du voxel coarse (coin min)
                 x0 = bounds[0] + i * dx
                 y0 = bounds[2] + j * dx
                 z0 = bounds[4] + k * dx
     
-                # Local sub-grid
+                # Sous-grille locale
                 xs = np.linspace(x0, x0 + dx, Nloc)
                 ys = np.linspace(y0, y0 + dx, Nloc)
                 zs = np.linspace(z0, z0 + dx, Nloc)
@@ -278,25 +283,23 @@ def main_Hashin_an():
                 X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
     
                 r = np.sqrt(X**2 + Y**2 + Z**2)
-                r_safe = np.maximum(r, 1e-12)   # Local radius
+                r_safe = np.maximum(r, 1e-12)
     
-                # Local phase
+                # Phase locale analytique (évite voxelisation !)
                 phase_loc = np.zeros_like(r, dtype=np.uint8)
                 phase_loc[r <= Rint] = 1
                 phase_loc[(r > Rint) & (r <= Rext)] = 2
     
-                # Stress field in spherical coordinates
+                # Contraintes sphériques
                 sigma_rr = np.zeros_like(r)
                 sigma_tt = np.zeros_like(r)
                 sigma_pp = np.zeros_like(r)
                 
-                # Strain field in spherical coordinates
                 eps_rr = np.zeros_like(r)
                 eps_tt = np.zeros_like(r)
                 eps_pp = np.zeros_like(r)
                 
-                
-                # Values in the central sphere
+    
                 sigma_rr[phase_loc == 1] = 3*K1*a1
                 sigma_tt[phase_loc == 1] = 3*K1*a1
                 sigma_pp[phase_loc == 1] = 3*K1*a1
@@ -305,8 +308,7 @@ def main_Hashin_an():
                 eps_tt[phase_loc == 1] = a1
                 eps_pp[phase_loc == 1] = a1
                 
-                
-                # Values in the coating
+    
                 mask2 = (phase_loc == 2)
                 sigma_rr[mask2] = 3*K2*a2 - (4*mu2*b2/r_safe[mask2]**3)
                 sigma_tt[mask2] = 3*K2*a2 + (2*mu2*b2/r_safe[mask2]**3)
@@ -316,8 +318,6 @@ def main_Hashin_an():
                 eps_tt[mask2] = a2 + (b2/r_safe[mask2]**3)
                 eps_pp[mask2] = a2 + (b2/r_safe[mask2]**3)
     
-                
-                # Values in the matrix
                 sigma_rr[phase_loc == 0] = 3*Keff*aeff
                 sigma_tt[phase_loc == 0] = 3*Keff*aeff
                 sigma_pp[phase_loc == 0] = 3*Keff*aeff
@@ -325,9 +325,8 @@ def main_Hashin_an():
                 eps_rr[phase_loc ==0] = aeff
                 eps_tt[phase_loc ==0] = aeff
                 eps_pp[phase_loc ==0] = aeff
-                
     
-                # Spherical to cartesian
+                # Passage sphérique → cartésien
                 theta = np.arccos(Z / r_safe)
                 phi = np.atan2(Y, X)
     
@@ -351,20 +350,23 @@ def main_Hashin_an():
                     eps_tt[..., None, None] * et[..., :, None] * et[..., None, :] +
                     eps_pp[..., None, None] * ep[..., :, None] * ep[..., None, :]
                 ) 
-    
-                # Mean value to be assigned to the voxel indexed by i,j,k
-                sigma_coarse[i, j, k] = sigma.mean(axis=(0, 1, 2))
-                eps_coarse[i, j, k] = eps.mean(axis=(0, 1, 2))
-              
+                
+                W_elast = 0.5*np.einsum('...ij,...ij->...', sigma, eps)
                 
     
-    # Cartesian coordinates of the stress and strain fields
+                # Moyenne locale → voxel coarse
+                sigma_coarse[i, j, k] = sigma.mean(axis=(0, 1, 2))
+                eps_coarse[i, j, k] = eps.mean(axis=(0, 1, 2))
+                W_elast_coarse[i, j, k] = W_elast.mean()
+                
+
     sigma_xx = sigma_coarse[...,0,0]
     sigma_yy = sigma_coarse[...,1,1]
     sigma_zz = sigma_coarse[...,2,2]
     sigma_xy = sigma_coarse[...,0,1]
     sigma_xz = sigma_coarse[...,0,2]
     sigma_yz = sigma_coarse[...,1,2]
+    
     
     eps_xx = eps_coarse[...,0,0]
     eps_yy = eps_coarse[...,1,1]
@@ -374,7 +376,6 @@ def main_Hashin_an():
     eps_yz = eps_coarse[...,1,2]
     
     
-    # Adding field values to the pv_grid
     grid_coarse.cell_data["sigma_xx_an"] = sigma_xx.flatten()
     grid_coarse.cell_data["sigma_yy_an"] = sigma_yy.flatten()
     grid_coarse.cell_data["sigma_zz_an"] = sigma_zz.flatten()
@@ -389,7 +390,7 @@ def main_Hashin_an():
     grid_coarse.cell_data["eps_xz_an"] = eps_xz.flatten()
     grid_coarse.cell_data["eps_yz_an"] = eps_yz.flatten()
     
-    
+    grid_coarse.cell_data["W_elast"] = W_elast_coarse.flatten()
     
     
     # ------------------
@@ -416,13 +417,12 @@ def main_Hashin_an():
 
 
 
-
 def main_Hashin_num():
     """
     Voxelized geometry of the Hashin's coated sphere problem for future numerical computation
     """
     
-    N = 64  # Number of voxels in each direction 
+    N = 16  # Number of voxels in each direction 
     Rint = 0.2
     Rext = 0.4
     coating_thickness = Rext-Rint
@@ -774,9 +774,88 @@ def main_multigrid_single_voxel():
     return grid, phase
 
 
+def test_laminate_box():
+
+    N = 1  # Number of voxels in each direction 
+
+    bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)  # Boundaries of the domain
+    grid = make_grid(bounds, (N + 1, N + 1, N + 1))
+
+    box = pv.Box(bounds=bounds)
+    inside_box = voxelize_on_grid(box, grid)
+
+    
+    
+    # ------------------
+    # Phase labeling
+    # ------------------
+    # 0 = matrix, 1 = pore, 2 = coating
+    phase = np.zeros_like(inside_box, dtype=np.uint8)
+    
+    grid.cell_data["phase"] = phase.flatten()    
+    
+    # -------------------------------------------
+    # Hybrid voxel labeling (hybrid or not)
+    # -------------------------------------------
+    bool_hybrid = np.zeros_like(inside_box, dtype=bool)
+    bool_hybrid[inside_box] = True
+
+    
+    grid.cell_data["bool_hybrid"] = bool_hybrid.flatten()
+    
+        
+    
+    # ------------------
+    # Phases int and ext
+    # ------------------
+    phases_couple = np.zeros((*inside_box.shape, 2), dtype=int)
+    phases_couple[inside_box] = (1,2)
+    
+    grid.cell_data["phases_couple"] = phases_couple.reshape(-1, 2)
+       
+    
+    
+    #------------------------------------------------------------------------------------------------------------------
+    # Volumic fraction labeling of the internal material,
+    # if voxel at the edge between pore and coating, volumic fraction of the pore (the internal material of the voxel,
+    # =1 for non-hybrid voxels
+    #  + Local normal for each voxel in cartesian coordinates
+    # -----------------------------------------------------------------------------------------------------------------
+    volumic_fraction = np.ones_like(inside_box, dtype=float)
+    local_cartesian_normal = np.zeros(inside_box.shape + (3,), dtype=float)
+
+    
+    indices = np.argwhere(bool_hybrid)
+    origin = np.array(grid.origin)
+    spacing = np.array(grid.spacing)
+    
+    
+    for i, j, k in indices:
+        local_cartesian_normal[i,j,k] = [1,0,0]  # Computation hypothesis : spherical geometry centered on (0,0,0)
+        volumic_fraction[i, j, k] = 0.3
+        
+      
+    
+    grid.cell_data["volumic_fraction"] = volumic_fraction.flatten()
+    grid.cell_data["local_cartesian_normal"] = local_cartesian_normal.reshape((-1, 3))
+    
+    local_x = local_cartesian_normal.reshape((-1, 3))[:, 0]
+    grid.cell_data["local_cartesian_normal_x"] = local_x
+    
+    local_y = local_cartesian_normal.reshape((-1, 3))[:, 1]
+    grid.cell_data["local_cartesian_normal_y"] = local_y
+    
+    local_z = local_cartesian_normal.reshape((-1, 3))[:, 2]
+    grid.cell_data["local_cartesian_normal_z"] = local_z
+    
+    
+    grid.save(f"results/test_laminate_{N}.vti") 
+    return grid, phase
+
+
 #main_3_phases()
-main_Hashin_an()
-#main_Hashin_num()
+#main_Hashin_an()
+main_Hashin_num()
 #main_multigrid_single_voxel()
 #test_laminate_box()
 
