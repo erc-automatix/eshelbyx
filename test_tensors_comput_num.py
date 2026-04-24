@@ -126,7 +126,7 @@ E1 = 1.0
 nu1 = 0.3
 
 E2 = E1*chi
-nu2 = 0.
+nu2 = 0.1
 
 
 
@@ -258,7 +258,7 @@ def comput_num(E_array):
         # A2EM solver
         for solver in [A2EMSolver]:
             tic = time()
-            eps_aux, eps, sig, info, scale_f = solver(E_macro, alpha, Gamma_0, tol=1e-16, max_iter=200, auto_scale=True, verbose=True)
+            eps_aux, eps, sig, info, scale_f = solver(E_macro, alpha, Gamma_0, tol=1e-8, max_iter=200, auto_scale=True, verbose=True)
         
             print("Solver info:", info)  # ["num_steps"])
             print(f"{solver.__name__} solver time", time() - tic)
@@ -319,6 +319,8 @@ def P_func(n):
 
     return P_array
 
+
+
 def C_sym_func(lmbda, mu):
     C_sym_array = jnp.array([
         [lmbda + 2*mu, lmbda,         lmbda,         0,     0,     0],
@@ -330,6 +332,19 @@ def C_sym_func(lmbda, mu):
     ])
     return C_sym_array
 
+
+def S_sym_func(E, nu):
+    mu = E / 2 / (1 + nu)
+    S_sym_array = jnp.array([
+        [1/E, -nu/E,         -nu/E,         0,     0,     0],
+        [-nu/E,         1/E, -nu/E,         0,     0,     0],
+        [-nu/E,         -nu/E,         1/E, 0,     0,     0],
+        [0,           0,           0,           1/mu,  0,     0],
+        [0,           0,           0,           0,     1/mu,  0],
+        [0,           0,           0,           0,     0,     1/mu],
+    ])
+    return S_sym_array
+
 K1 = E1 / (3 * (1 - 2*nu1))
 K2 = E2 / (3 * (1 - 2*nu2))
 
@@ -337,10 +352,17 @@ K2 = E2 / (3 * (1 - 2*nu2))
 lmbda1 = E1 * nu1 / (1 + nu1) / (1 - 2 * nu1)
 mu1 = E1 / 2 / (1 + nu1)
 C1 = C_sym_func(lmbda1, mu1)
+S1 = S_sym_func(E1, nu1)
 
 lmbda2 = E2 * nu2 / (1 + nu2) / (1 - 2 * nu2)
 mu2 = E2 / 2 / (1 + nu2)
 C2 = C_sym_func(lmbda2, mu2)
+S2 = S_sym_func(E2, nu2)
+
+
+C_Voigt = 0.5*C1 + 0.5*C2
+S_Reuss = 0.5*S1 + 0.5*S2
+C_Reuss = jnp.linalg.inv(S_Reuss)
 
 secu = 2    # Safety parameter
 eigenvalues = jnp.array([3*K1, 3*K2, 2*mu1, 2*mu2])
@@ -365,6 +387,7 @@ A = A1*0.5 + A2*0.5
 
 C_lam = (I + (jnp.linalg.inv(jnp.linalg.inv(A) - P)))*lambda_param
 
+
 def to_3d(sig_array):    
     sig = jnp.array([
         [sig_array[0],         sig_array[3]/jnp.sqrt(2),         sig_array[4]/jnp.sqrt(2)],
@@ -374,14 +397,19 @@ def to_3d(sig_array):
     return sig
 
 
-
-def comput_an(E_array):
+# Analytical solution for xx, yy, zz, xy
+def comput_an_P(E_array):
     sig_array = jnp.einsum('ij,j->i', C_lam, jnp.array(E_array))  
     sig = to_3d(sig_array)
     return sig
 
 
-
+# Analytical solution for xz, yz
+def comput_an(E_array):
+    mu_Reuss = 1/((0.5/mu1)+(0.5/mu2))
+    sig_array = 2*mu_Reuss*E_array
+    sig = to_3d(sig_array)
+    return sig
 
 
 # ---------------------------------------------------------------------
@@ -389,17 +417,17 @@ def comput_an(E_array):
 # ---------------------------------------------------------------------
 
 # Macroscopic strain E applied
-E_array_xx = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+E_array_xx = jnp.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-E_array_yy = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+E_array_yy = jnp.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0])
 
-E_array_zz = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+E_array_zz = jnp.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
 
-E_array_xy = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+E_array_xy = jnp.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
 
-E_array_xz = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+E_array_xz = jnp.array([0.0, 0.0, 0.0, 0.0, 1.0, 0.0])
 
-E_array_yz = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+E_array_yz = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
 
 
 # Numerical stress solutions
@@ -412,10 +440,10 @@ sig_num_yz = comput_num(E_array_yz)
 
 
 # Analytical stress solutions 
-sig_an_xx = comput_an(E_array_xx)    
-sig_an_yy = comput_an(E_array_yy)    
-sig_an_zz = comput_an(E_array_zz)  
-sig_an_xy = comput_an(E_array_xy)  
+sig_an_xx = comput_an_P(E_array_xx) 
+sig_an_yy = comput_an_P(E_array_yy)    
+sig_an_zz = comput_an_P(E_array_zz)  
+sig_an_xy = comput_an_P(E_array_xy)  
 sig_an_xz = comput_an(E_array_xz)  
 sig_an_yz = comput_an(E_array_yz)  
 
