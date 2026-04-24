@@ -196,13 +196,12 @@ def _apply_alpha(eps, material_params, C0):
 
     iC = (C + C0).inv
     alp = iC @ (C0 * 2.0)
-    sig = alp @ eps  # here alp is a IsotropicTensor4
-    return SymmetricTensor2(tensor=sig)
+    return alp @ eps  # here alp is a IsotropicTensor4
 
 
 @eqx.filter_jit
 def apply_alpha(eps, params, C0):
-    eps_flatten = jnp.asarray(eps).reshape(-1, 3, 3)
+    eps_flatten = SymmetricTensor2(tensor=jnp.asarray(eps).reshape(-1, 3, 3))
     sig_tensor = jax.vmap(_apply_alpha, in_axes=(0, 0, None))(eps_flatten, params, C0)
     return sig_tensor.tensor.reshape(eps.shape)
 
