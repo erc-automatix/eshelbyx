@@ -11,6 +11,7 @@ license = { text = "GNU LGPLv2.1" }  # Replace or remove if not using MIT
 keywords = ["material science", "material modeling", "solid mechanics", "homogenization", "FFT", "automatic differentiation"]
 requires-python = ">=3.10"
 dependencies = [
+    "jaxmat>=0.0.3",
     "jax>=0.6.1",
     "equinox",
     "diffrax",
