@@ -32,6 +32,8 @@ def A2EMSolver(
     def projection_on_D(X):
         z = Gamma_0.apply_C0(X)
         return Gamma_0.mv(z)
+    
+    fact_sec = 1e-6     # used for homogenous solutions (eps = E_macro => k_A2EM explodes)
       
 
     # ------------------------
@@ -58,14 +60,14 @@ def A2EMSolver(
         
 
         eps0 = Gamma_0.apply_C0_inv(sig_new)
-        k_A2EM = ref_norm(eps0) / ref_norm(E_macro - eps_new)
+        k_A2EM = ref_norm(eps0) / (ref_norm(E_macro - eps_new)+fact_sec)
         new_scale = jax.lax.select(auto_scale, k_A2EM, 1.0)
 
         eps_aux_new = 0.5 * (eps0 / new_scale + eps_new)
         
 
         X_new = X - lam_new * Z + (1 / new_scale - 1 / scale) * W_new
-        Delta_new = ref_norm(X_new) / ref_norm(E_macro - eps_new)
+        Delta_new = ref_norm(X_new) / (ref_norm(E_macro - eps_new)+fact_sec)
         if verbose:
             jax.debug.print(
                 "Iteration {} ||X|| = {:.5e} Delta = {:.5e} ||sig|| = {:.5e} k_A2EM = {:.5e} lambda = {:.5e} scale = {:.5e}",
