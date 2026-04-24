@@ -11,7 +11,10 @@ jax.config.update("jax_platform_name", "cpu")
 
 import jax.numpy as jnp
 import equinox as eqx
+from jaxmat.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
+import jaxmat.materials as jm
 
+from eshelbyx.utils import flatten_batch_dims, reshape_batch_dims
 from eshelbyx.green_operator import (
     GreenOperator,
 )
@@ -23,7 +26,6 @@ from eshelbyx.discretization import (
 
 
 from eshelbyx.grid import load_vtk_grid
-from jaxmat.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
 from eshelbyx.krylov_solver import KrylovAEMSolver
 from eshelbyx.solver import A2EMSolver, AEMSolver, MSSolver
 
@@ -34,7 +36,7 @@ current_folder = Path(__file__).parent.resolve()
 chi = 10
 
 # Solver
-solver_used = A2EMSolver
+solver_used = AEMSolver
 
 # Discretization
 discretization_used = WillotDiscretization
@@ -169,9 +171,9 @@ def elastic_law(eps, material_params):
 
 @eqx.filter_jit
 def constitutive_law(eps, params):
-    eps_flatten = eps.flatten_batch_dims()
+    eps_flatten = flatten_batch_dims(eps)
     sig_flatten = jax.vmap(elastic_law)(eps_flatten, params)
-    return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
+    return reshape_batch_dims(sig_flatten, grid.shape)
 
 
 # Material parameters mapping of reference medium for Moulinec and Suquet's solver
@@ -296,47 +298,24 @@ def P_func(n):
     term3 = jnp.einsum("j,il,m->ijlm", n, delta, n)
     term4 = jnp.einsum("j,im,l->ijlm", n, delta, n)
 
-    P4 = 0.5 * (term1 + term2 + term3 + term4) - jnp.einsum("i,j,l,m->ijlm", n, n, n, n)
-
-    # Order (6x6)
-    order = jnp.array([[0, 0], [1, 1], [2, 2], [0, 1], [0, 2], [1, 2]])
-
-    # P matrix 6*6
-    P_array = P4[
-        order[:, 0][:, None],
-        order[:, 1][:, None],
-        order[:, 0][None, :],
-        order[:, 1][None, :],
-    ]
-
-    return P_array
-
-
-def C_sym_func(lmbda, mu):
-    C_sym_array = jnp.array(
-        [
-            [lmbda + 2 * mu, lmbda, lmbda, 0, 0, 0],
-            [lmbda, lmbda + 2 * mu, lmbda, 0, 0, 0],
-            [lmbda, lmbda, lmbda + 2 * mu, 0, 0, 0],
-            [0, 0, 0, 2 * mu, 0, 0],
-            [0, 0, 0, 0, 2 * mu, 0],
-            [0, 0, 0, 0, 0, 2 * mu],
-        ]
+    P4 = SymmetricTensor4(
+        tensor=0.5 * (term1 + term2 + term3 + term4)
+        - jnp.einsum("i,j,l,m->ijlm", n, n, n, n)
     )
-    return C_sym_array
+    return P4.array
 
 
-K1 = E1 / (3 * (1 - 2 * nu1))
-K2 = E2 / (3 * (1 - 2 * nu2))
+mat1 = jm.LinearElasticIsotropic(E=E1, nu=nu1)
+C1 = mat1.C.to_symmetric().array
 
 
-lmbda1 = E1 * nu1 / (1 + nu1) / (1 - 2 * nu1)
-mu1 = E1 / 2 / (1 + nu1)
-C1 = C_sym_func(lmbda1, mu1)
+mat2 = jm.LinearElasticIsotropic(E=E2, nu=nu2)
+C2 = mat2.C.to_symmetric().array
 
-lmbda2 = E2 * nu2 / (1 + nu2) / (1 - 2 * nu2)
-mu2 = E2 / 2 / (1 + nu2)
-C2 = C_sym_func(lmbda2, mu2)
+K1 = mat1.kappa
+K2 = mat2.kappa
+mu1 = mat1.mu
+mu2 = mat2.mu
 
 secu = 2  # Safety parameter
 eigenvalues = jnp.array([3 * K1, 3 * K2, 2 * mu1, 2 * mu2])
@@ -345,17 +324,7 @@ lambda_param = jnp.max(eigenvalues) * secu
 n = [0, 0, 1]
 P = P_func(n)
 
-I = jnp.array(
-    [
-        [1, 0, 0, 0, 0, 0],
-        [0, 1, 0, 0, 0, 0],
-        [0, 0, 1, 0, 0, 0],
-        [0, 0, 0, 1, 0, 0],
-        [0, 0, 0, 0, 1, 0],
-        [0, 0, 0, 0, 0, 1],
-    ]
-)
-
+I = SymmetricTensor4.identity().array
 
 A1 = jnp.linalg.inv(P + (lambda_param * (jnp.linalg.inv(C1 - lambda_param * I))))
 A2 = jnp.linalg.inv(P + (lambda_param * (jnp.linalg.inv(C2 - lambda_param * I))))
@@ -392,11 +361,11 @@ E_array_yy = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
 
 E_array_zz = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
 
-E_array_xy = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+E_array_xy = [0.0, 0.0, 0.0, jnp.sqrt(2.0), 0.0, 0.0]
 
-E_array_xz = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+E_array_xz = [0.0, 0.0, 0.0, 0.0, jnp.sqrt(2.0), 0.0]
 
-E_array_yz = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+E_array_yz = [0.0, 0.0, 0.0, 0.0, 0.0, jnp.sqrt(2.0)]
 
 
 # Numerical stress solutions
@@ -407,6 +376,10 @@ sig_num_xy = comput_num(E_array_xy)
 sig_num_xz = comput_num(E_array_xz)
 sig_num_yz = comput_num(E_array_yz)
 
+# print(2 / (0.5 * 1 / mu1 + 0.5 * 1 / mu2))
+
+# # print(sig_num_xz)
+# raise
 
 # Analytical stress solutions
 sig_an_xx = comput_an(E_array_xx)
