@@ -6,7 +6,7 @@ import jax
 from time import time
 
 jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_platform_name", "gpu")
+jax.config.update("jax_platform_name", "cpu")
 
 import jax.numpy as jnp
 import equinox as eqx
@@ -20,7 +20,7 @@ from eshelbyx.discretization import (
 )
 
 from eshelbyx.grid import load_vtk_grid
-from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4
+from jaxmat.tensors import SymmetricTensor2, IsotropicTensor4
 from eshelbyx.krylov_solver import KrylovAEMSolver
 from eshelbyx.solver import A2EMSolver, AEMSolver
 

@@ -19,10 +19,10 @@ from eshelbyx.discretization import (
     WillotDiscretization,
     SchneiderDiscretization,
 )
-from eshelbyx.solver import AEM_solver
+from eshelbyx.solver import AEMSolver
 
 from eshelbyx.grid import Grid, load_vtk_grid
-from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
+from jaxmat.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
 
 current_folder = Path(__file__).parent.resolve()
 

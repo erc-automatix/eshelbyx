@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 import lineax as lx
-from eshelbyx.tensors import (
+from jaxmat.tensors import (
     Tensor,
     SymmetricTensor2,
     IsotropicTensor4,

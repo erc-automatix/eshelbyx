@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from eshelbyx.tensors import SymmetricTensor2, SymmetricTensor4, IsotropicTensor4
+from jaxmat.tensors import SymmetricTensor2, SymmetricTensor4, IsotropicTensor4
 
 
 eps = SymmetricTensor2(tensor=jnp.diag(jnp.asarray([1.0, 0.0, 0.0])))

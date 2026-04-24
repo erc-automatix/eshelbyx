@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 import pyvista as pv
-from eshelbyx.tensors import Tensor
+from jaxmat.tensors import Tensor
 
 
 class Grid(eqx.Module):

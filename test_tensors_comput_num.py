@@ -23,30 +23,27 @@ from eshelbyx.discretization import (
 
 
 from eshelbyx.grid import load_vtk_grid
-from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
+from jaxmat.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
 from eshelbyx.krylov_solver import KrylovAEMSolver
 from eshelbyx.solver import A2EMSolver, AEMSolver, MSSolver
 
 current_folder = Path(__file__).parent.resolve()
 
 
-# Contrast 
+# Contrast
 chi = 10
 
-# Solver 
+# Solver
 solver_used = A2EMSolver
 
 # Discretization
 discretization_used = WillotDiscretization
 
 
-
-
-
-
 # ----------------------------------------------------------------------------
 # Creation of the micro-structure : laminate
 # ----------------------------------------------------------------------------
+
 
 def voxelize_on_grid(mesh: pv.PolyData, grid: pv.ImageData):
     """
@@ -80,13 +77,13 @@ def make_grid(bounds, dims):
     return grid
 
 
-N = 2   # Number of voxels in each direction
+N = 2  # Number of voxels in each direction
 bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)  # Boundaries of the domain
 grid = make_grid(bounds, (N + 1, N + 1, N + 1))
-    
+
 box = pv.Box(bounds=bounds)
 inside_box = voxelize_on_grid(box, grid)
-    
+
 # ------------------
 # Phase labeling
 # ------------------
@@ -96,13 +93,10 @@ phase = np.ones(centers.shape[0], dtype=np.uint8)
 # Condition : z < 0 -> 1, otherwise -> 2
 phase[centers[:, 2] >= 0] = 2
 grid.cell_data["phase"] = phase
-    
-grid.save(f"test_box_{N}.vti")  # Laminate with normal between the materials in the z direction
 
-
-
-
-
+grid.save(
+    f"test_box_{N}.vti"
+)  # Laminate with normal between the materials in the z direction
 
 
 # -----------------------------------------------------------------------------
@@ -111,7 +105,6 @@ grid.save(f"test_box_{N}.vti")  # Laminate with normal between the materials in 
 
 file_name = f"test_box_{N}.vti"
 grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
-
 
 
 # Define phase-wise properties based on grid.markers
@@ -125,35 +118,37 @@ def piecewise_field(field, value_map, grid):
 E1 = 1.0
 nu1 = 0.3
 
-E2 = E1*chi
-nu2 = 0.
-
+E2 = E1 * chi
+nu2 = 0.0
 
 
 # Reference medium depending on the solver being used
-if solver_used == AEMSolver or solver_used == A2EMSolver or solver_used == KrylovAEMSolver :
+if (
+    solver_used == AEMSolver
+    or solver_used == A2EMSolver
+    or solver_used == KrylovAEMSolver
+):
     # Reference medium for the AEM and A2EM solvers
     E0 = 1.0
     nu0 = 0.3
-    
-elif solver_used == MSSolver :
+
+elif solver_used == MSSolver:
     # Reference medium for MS solver
-    K1 = E1 / (3 * (1 - 2*nu1))
-    K2 = E2 / (3 * (1 - 2*nu2))
-    K0 = (K1 + K2)/2
-    
+    K1 = E1 / (3 * (1 - 2 * nu1))
+    K2 = E2 / (3 * (1 - 2 * nu2))
+    K0 = (K1 + K2) / 2
+
     mu1 = E1 / (2 * (1 + nu1))
     mu2 = E2 / (2 * (1 + nu2))
-    mu0 = (mu1 + mu2)/2
-    
-    E0 = (9*K0*mu0) / (3*K0 + mu0)
-    nu0 = (3*K0 - 2*mu0) / 2 / (3*K0 + mu0)
+    mu0 = (mu1 + mu2) / 2
+
+    E0 = (9 * K0 * mu0) / (3 * K0 + mu0)
+    nu0 = (3 * K0 - 2 * mu0) / 2 / (3 * K0 + mu0)
 
 
 # Reference medium stiffness tensor written using the IsotropicTensor4 class
 lambda_0, mu0 = E0 * nu0 / (1 + nu0) / (1 - 2 * nu0), E0 / 2 / (1 + nu0)
-C0 = IsotropicTensor4(kappa=lambda_0 + (2 / 3) * mu0, mu = mu0)
-
+C0 = IsotropicTensor4(kappa=lambda_0 + (2 / 3) * mu0, mu=mu0)
 
 
 # Material parameters mapping
@@ -163,9 +158,8 @@ E = piecewise_field(jnp.zeros(grid.shape), E_map, grid)
 nu = piecewise_field(jnp.zeros(grid.shape), nu_map, grid)
 
 
-
 def elastic_law(eps, material_params):
-    #Elastic law at the material point level. Takes a `SymmetricTensor2` as strain input and outputs stress as a `SymmetricTensor2`.
+    # Elastic law at the material point level. Takes a `SymmetricTensor2` as strain input and outputs stress as a `SymmetricTensor2`.
     E, nu = material_params
     lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
     mu = E / 2 / (1 + nu)
@@ -185,9 +179,9 @@ E0_map = {1: E0, 2: E0}
 nu0_map = {1: nu0, 2: nu0}
 E0 = piecewise_field(jnp.zeros(grid.shape), E0_map, grid)
 nu0 = piecewise_field(jnp.zeros(grid.shape), nu0_map, grid)
-    
+
 material_params_0 = (E0.ravel(), nu0.ravel())
-    
+
 C_eps_0 = lambda eps: constitutive_law(eps, material_params_0)
 
 
@@ -195,30 +189,28 @@ C_eps_0 = lambda eps: constitutive_law(eps, material_params_0)
 def _apply_alpha(eps, material_params, C0):
 
     E, nu = material_params
-            
+
     lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
     mu = E / 2 / (1 + nu)
-    C = IsotropicTensor4(kappa = lmbda + 2 / 3 * mu, mu = mu)
+    C = IsotropicTensor4(kappa=lmbda + 2 / 3 * mu, mu=mu)
 
     iC = (C + C0).inv
     alp = iC @ (C0 * 2.0)
-    sig = alp.eval_jvp(eps)  # here alp is a IsotropicTensor4
+    sig = alp @ eps  # here alp is a IsotropicTensor4
     return SymmetricTensor2(tensor=sig)
 
-  
 
 @eqx.filter_jit
-def apply_alpha(eps, params,C0):
+def apply_alpha(eps, params, C0):
     eps_flatten = jnp.asarray(eps).reshape(-1, 3, 3)
     sig_tensor = jax.vmap(_apply_alpha, in_axes=(0, 0, None))(eps_flatten, params, C0)
     return sig_tensor.tensor.reshape(eps.shape)
 
 
-
 material_params = (E.ravel(), nu.ravel())
 
 
-alpha = lambda eps, scale=1.0: apply_alpha(eps, material_params, C0*scale)
+alpha = lambda eps, scale=1.0: apply_alpha(eps, material_params, C0 * scale)
 C_eps = lambda eps: constitutive_law(eps, material_params)
 
 # Green operator
@@ -228,24 +220,27 @@ Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=discretization_used(gri
 def comput_num(E_array):
     E_macro = SymmetricTensor2(array=jnp.asarray(E_array))
     E_macro = grid.broadcast_to_grid(E_macro)  # create a field on the grid
-    
-    
+
     # Numerical computation depending on the solver being used
-    if solver_used == MSSolver :
+    if solver_used == MSSolver:
         # Moulinec and Suquet's solver
         for solver in [MSSolver]:
             tic = time()
-            eps, sig, info = solver(E_macro, C_eps, C_eps_0, Gamma_0, tol=1e-6, max_iter=50)
+            eps, sig, info = solver(
+                E_macro, C_eps, C_eps_0, Gamma_0, tol=1e-6, max_iter=50
+            )
             print("Solver info:", info)  # ["num_steps"])
             print(f"{solver.__name__} solver time", time() - tic)
             print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
             print("\n")
-    
-    elif solver_used == AEMSolver :
+
+    elif solver_used == AEMSolver:
         # AEM solver
         for solver in [AEMSolver]:
             tic = time()
-            eps_aux, eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1e-6, max_iter=50)
+            eps_aux, eps, sig, info = solver(
+                E_macro, alpha, Gamma_0, tol=1e-6, max_iter=50
+            )
             print("Solver info:", info)  # ["num_steps"])
             print(f"{solver.__name__} solver time", time() - tic)
             print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
@@ -253,20 +248,28 @@ def comput_num(E_array):
             eps_aux_jnp = jnp.array(eps_aux)
             pv_grid.cell_data["strain_aux"] = eps_aux_jnp.reshape((-1, 3, 3))
             scale_f = 1.0
-    
-    elif solver_used == A2EMSolver :
+
+    elif solver_used == A2EMSolver:
         # A2EM solver
         for solver in [A2EMSolver]:
             tic = time()
-            eps_aux, eps, sig, info, scale_f = solver(E_macro, alpha, Gamma_0, tol=1e-16, max_iter=200, auto_scale=True, verbose=True)
-        
+            eps_aux, eps, sig, info, scale_f = solver(
+                E_macro,
+                alpha,
+                Gamma_0,
+                tol=1e-16,
+                max_iter=200,
+                auto_scale=True,
+                verbose=True,
+            )
+
             print("Solver info:", info)  # ["num_steps"])
             print(f"{solver.__name__} solver time", time() - tic)
             print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
             print("\n")
             pv_grid.cell_data["strain_aux"] = eps_aux.reshape((-1, 3, 3))
-    
-    elif solver_used == KrylovAEMSolver :
+
+    elif solver_used == KrylovAEMSolver:
         # Krylov-AEM solver
         for solver in [KrylovAEMSolver]:
             tic = time()
@@ -277,10 +280,8 @@ def comput_num(E_array):
             print("\n")
 
     sig_mean_num = jnp.mean(sig, axis=[0, 1, 2])
-    
+
     return sig_mean_num
-
-
 
 
 # -----------------------------------------------------------------
@@ -291,47 +292,43 @@ def P_func(n):
     delta = jnp.eye(3)
 
     # Construction du tenseur P_ijkl (3x3x3x3)
-    term1 = jnp.einsum('i,jl,m->ijlm', n, delta, n)
-    term2 = jnp.einsum('i,jm,l->ijlm', n, delta, n)
-    term3 = jnp.einsum('j,il,m->ijlm', n, delta, n)
-    term4 = jnp.einsum('j,im,l->ijlm', n, delta, n)
+    term1 = jnp.einsum("i,jl,m->ijlm", n, delta, n)
+    term2 = jnp.einsum("i,jm,l->ijlm", n, delta, n)
+    term3 = jnp.einsum("j,il,m->ijlm", n, delta, n)
+    term4 = jnp.einsum("j,im,l->ijlm", n, delta, n)
 
-    P4 = 0.5 * (term1 + term2 + term3 + term4) \
-         - jnp.einsum('i,j,l,m->ijlm', n, n, n, n)
+    P4 = 0.5 * (term1 + term2 + term3 + term4) - jnp.einsum("i,j,l,m->ijlm", n, n, n, n)
 
     # Order (6x6)
-    order = jnp.array([
-        [0,0],
-        [1,1],
-        [2,2],
-        [0,1],
-        [0,2],
-        [1,2]
-    ])
-    
+    order = jnp.array([[0, 0], [1, 1], [2, 2], [0, 1], [0, 2], [1, 2]])
+
     # P matrix 6*6
     P_array = P4[
-        order[:,0][:,None],
-        order[:,1][:,None],
-        order[:,0][None,:],
-        order[:,1][None,:]
+        order[:, 0][:, None],
+        order[:, 1][:, None],
+        order[:, 0][None, :],
+        order[:, 1][None, :],
     ]
 
     return P_array
 
+
 def C_sym_func(lmbda, mu):
-    C_sym_array = jnp.array([
-        [lmbda + 2*mu, lmbda,         lmbda,         0,     0,     0],
-        [lmbda,         lmbda + 2*mu, lmbda,         0,     0,     0],
-        [lmbda,         lmbda,         lmbda + 2*mu, 0,     0,     0],
-        [0,           0,           0,           2*mu,  0,     0],
-        [0,           0,           0,           0,     2*mu,  0],
-        [0,           0,           0,           0,     0,     2*mu],
-    ])
+    C_sym_array = jnp.array(
+        [
+            [lmbda + 2 * mu, lmbda, lmbda, 0, 0, 0],
+            [lmbda, lmbda + 2 * mu, lmbda, 0, 0, 0],
+            [lmbda, lmbda, lmbda + 2 * mu, 0, 0, 0],
+            [0, 0, 0, 2 * mu, 0, 0],
+            [0, 0, 0, 0, 2 * mu, 0],
+            [0, 0, 0, 0, 0, 2 * mu],
+        ]
+    )
     return C_sym_array
 
-K1 = E1 / (3 * (1 - 2*nu1))
-K2 = E2 / (3 * (1 - 2*nu2))
+
+K1 = E1 / (3 * (1 - 2 * nu1))
+K2 = E2 / (3 * (1 - 2 * nu2))
 
 
 lmbda1 = E1 * nu1 / (1 + nu1) / (1 - 2 * nu1)
@@ -342,46 +339,47 @@ lmbda2 = E2 * nu2 / (1 + nu2) / (1 - 2 * nu2)
 mu2 = E2 / 2 / (1 + nu2)
 C2 = C_sym_func(lmbda2, mu2)
 
-secu = 2    # Safety parameter
-eigenvalues = jnp.array([3*K1, 3*K2, 2*mu1, 2*mu2])
-lambda_param = jnp.max(eigenvalues)*secu
+secu = 2  # Safety parameter
+eigenvalues = jnp.array([3 * K1, 3 * K2, 2 * mu1, 2 * mu2])
+lambda_param = jnp.max(eigenvalues) * secu
 
-n = [0,0,1]
+n = [0, 0, 1]
 P = P_func(n)
 
-I = jnp.array([
-    [1 ,          0,         0,         0,     0,     0],
-    [0,           1,         0,         0,     0,     0],
-    [0,           0,         1,         0,     0,     0],
-    [0,           0,         0,         1,     0,     0],
-    [0,           0,         0,         0,     1,     0],
-    [0,           0,         0,         0,     0,     1],
-])
+I = jnp.array(
+    [
+        [1, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0],
+        [0, 0, 0, 0, 1, 0],
+        [0, 0, 0, 0, 0, 1],
+    ]
+)
 
 
-A1 = jnp.linalg.inv( P + (lambda_param * ( jnp.linalg.inv(C1-lambda_param*I))) )
-A2 = jnp.linalg.inv( P + (lambda_param * ( jnp.linalg.inv(C2-lambda_param*I))) )
-A = A1*0.5 + A2*0.5
+A1 = jnp.linalg.inv(P + (lambda_param * (jnp.linalg.inv(C1 - lambda_param * I))))
+A2 = jnp.linalg.inv(P + (lambda_param * (jnp.linalg.inv(C2 - lambda_param * I))))
+A = A1 * 0.5 + A2 * 0.5
 
-C_lam = (I + (jnp.linalg.inv(jnp.linalg.inv(A) - P)))*lambda_param
+C_lam = (I + (jnp.linalg.inv(jnp.linalg.inv(A) - P))) * lambda_param
 
-def to_3d(sig_array):    
-    sig = jnp.array([
-        [sig_array[0],         sig_array[3]/jnp.sqrt(2),         sig_array[4]/jnp.sqrt(2)],
-        [sig_array[3]/jnp.sqrt(2),         sig_array[1],         sig_array[5]/jnp.sqrt(2)],
-        [sig_array[4]/jnp.sqrt(2),         sig_array[5]/jnp.sqrt(2),         sig_array[2]],
-    ])
+
+def to_3d(sig_array):
+    sig = jnp.array(
+        [
+            [sig_array[0], sig_array[3] / jnp.sqrt(2), sig_array[4] / jnp.sqrt(2)],
+            [sig_array[3] / jnp.sqrt(2), sig_array[1], sig_array[5] / jnp.sqrt(2)],
+            [sig_array[4] / jnp.sqrt(2), sig_array[5] / jnp.sqrt(2), sig_array[2]],
+        ]
+    )
     return sig
-
 
 
 def comput_an(E_array):
-    sig_array = jnp.einsum('ij,j->i', C_lam, jnp.array(E_array))  
+    sig_array = jnp.einsum("ij,j->i", C_lam, jnp.array(E_array))
     sig = to_3d(sig_array)
     return sig
-
-
-
 
 
 # ---------------------------------------------------------------------
@@ -411,28 +409,29 @@ sig_num_xz = comput_num(E_array_xz)
 sig_num_yz = comput_num(E_array_yz)
 
 
-# Analytical stress solutions 
-sig_an_xx = comput_an(E_array_xx)    
-sig_an_yy = comput_an(E_array_yy)    
-sig_an_zz = comput_an(E_array_zz)  
-sig_an_xy = comput_an(E_array_xy)  
-sig_an_xz = comput_an(E_array_xz)  
-sig_an_yz = comput_an(E_array_yz)  
+# Analytical stress solutions
+sig_an_xx = comput_an(E_array_xx)
+sig_an_yy = comput_an(E_array_yy)
+sig_an_zz = comput_an(E_array_zz)
+sig_an_xy = comput_an(E_array_xy)
+sig_an_xz = comput_an(E_array_xz)
+sig_an_yz = comput_an(E_array_yz)
 
 
 # Errors
 def err(sig_num, sig_an):
-    diff = jnp.abs(sig_num-sig_an)
-    norm_diff = jnp.sqrt(jnp.einsum('ij,ij->', diff, diff))
-    norm_an = jnp.sqrt(jnp.einsum('ij,ij->', sig_an, sig_an))
-    return (norm_diff/norm_an)*100
+    diff = jnp.abs(sig_num - sig_an)
+    norm_diff = jnp.sqrt(jnp.einsum("ij,ij->", diff, diff))
+    norm_an = jnp.sqrt(jnp.einsum("ij,ij->", sig_an, sig_an))
+    return (norm_diff / norm_an) * 100
 
-err_xx = err(sig_num_xx,sig_an_xx)
-err_yy = err(sig_num_yy,sig_an_yy)
-err_zz = err(sig_num_zz,sig_an_zz)
-err_xy = err(sig_num_xy,sig_an_xy)
-err_xz = err(sig_num_xz,sig_an_xz)
-err_yz = err(sig_num_yz,sig_an_yz)
+
+err_xx = err(sig_num_xx, sig_an_xx)
+err_yy = err(sig_num_yy, sig_an_yy)
+err_zz = err(sig_num_zz, sig_an_zz)
+err_xy = err(sig_num_xy, sig_an_xy)
+err_xz = err(sig_num_xz, sig_an_xz)
+err_yz = err(sig_num_yz, sig_an_yz)
 
 print(f"err_xx : {err_xx:.2f} %")
 print(f"err_yy : {err_yy:.2f} %")
@@ -440,10 +439,3 @@ print(f"err_zz : {err_zz:.2f} %")
 print(f"err_xy : {err_xy:.2f} %")
 print(f"err_xz : {err_xz:.2f} %")
 print(f"err_yz : {err_yz:.2f} %")
-
-
-
-
-
-
-

@@ -88,7 +88,7 @@ def newton_solve_jittable(
 
 import equinox as eqx
 from eshelbyx.krylov_solver import AEMAuxOperator, LSOperator
-from eshelbyx.tensors import SymmetricTensor2
+from jaxmat.tensors import SymmetricTensor2
 
 
 def NewtonKrylovAEMSolver(
