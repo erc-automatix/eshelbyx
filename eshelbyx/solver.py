@@ -120,7 +120,7 @@ def A2EMSolver(
         "scale_final": scale_f,
     }
 
-    return eps_aux_f, eps, sigma, convergence_history, scale_f
+    return eps, sigma, convergence_history, scale_f
 
 
 def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
@@ -225,7 +225,7 @@ def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
 
     convergence_history["iterations"] = i_final
 
-    return eps_aux_f, eps, sigma, convergence_history
+    return eps, sigma, convergence_history
 
 
 def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=True):
