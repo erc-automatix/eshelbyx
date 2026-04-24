@@ -67,7 +67,7 @@ def A2EMSolver(
                 it,
                 ref_norm(X) / ref_norm(E_macro),
                 Delta_new,
-                jnp.mean(sig_new[..., 0, 0]),
+                jnp.mean(jnp.linalg.matrix_norm(sig_new)),
                 k_A2EM,
                 lam_new,
                 new_scale,
@@ -151,8 +151,8 @@ def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
-    X = E_macro
-    eps_aux = SymmetricTensor2(tensor=jnp.zeros_like(E_macro))
+    X = jnp.asarray(E_macro)
+    eps_aux = jnp.zeros_like(E_macro)
     lam = 0.0
 
     # E_norm = ref_norm(E_macro)
@@ -203,10 +203,10 @@ def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
                 i,
                 ref_norm(X) / ref_norm(E_macro),
                 Delta,
-                jnp.mean(sig[..., 0, 0]),
+                jnp.mean(jnp.linalg.matrix_norm(sig)),
                 lam_new,
             )
-        return i + 1, X.sym, eps_aux_new.sym, lam_new, Delta, convergence_history
+        return i + 1, X, eps_aux_new, lam_new, Delta, convergence_history
 
     # ------------------------------------------------------------------
     # Run
@@ -251,7 +251,7 @@ def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=
     # Initialisation
     # ------------------------------------------------------------------
     X = E_macro
-    eps = SymmetricTensor2(tensor=jnp.zeros_like(E_macro))
+    eps = jnp.zeros_like(E_macro)
 
     convergence_history = {
         # "residual": jnp.zeros((max_iter,)),
@@ -288,9 +288,9 @@ def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=
                 "Iteration {}  Delta = {:.5e} ||sig|| = {:.5e}",
                 i,
                 Delta,
-                jnp.mean(sig[..., 0, 0]),
+                jnp.mean(jnp.linalg.matrix_norm(sig)),
             )
-        return i + 1, X.sym, Delta, eps.sym, convergence_history
+        return i + 1, X, Delta, eps, convergence_history
 
     # ------------------------------------------------------------------
     # Run
