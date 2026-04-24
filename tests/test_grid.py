@@ -5,13 +5,7 @@ Run with: pytest test_simple_grid.py -v
 Or: python test_simple_grid.py
 """
 
-try:
-    import pytest
-except ImportError:
-    pytest = None
-
 import jax.numpy as jnp
-import numpy as np
 from eshelbyx.grid import Grid
 
 
