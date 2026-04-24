@@ -24,8 +24,7 @@ from eshelbyx.discretization import (
     SchneiderDiscretization,
 )
 
-
-from eshelbyx.grid import load_vtk_grid
+from eshelbyx.grid import Grid
 from eshelbyx.krylov_solver import KrylovAEMSolver
 from eshelbyx.solver import A2EMSolver, AEMSolver, MSSolver
 
@@ -36,85 +35,18 @@ current_folder = Path(__file__).parent.resolve()
 chi = 10
 
 # Solver
-solver_used = AEMSolver
+solver_used = A2EMSolver
 
 # Discretization
 discretization_used = WillotDiscretization
 
 
-# ----------------------------------------------------------------------------
-# Creation of the micro-structure : laminate
-# ----------------------------------------------------------------------------
-
-
-def voxelize_on_grid(mesh: pv.PolyData, grid: pv.ImageData):
-    """
-    Project a surface mesh onto an existing grid.
-    Returns:
-        inside_cells : (nx-1, ny-1, nz-1) boolean array
-    """
-    centers = grid.cell_centers()
-
-    enclosed = centers.select_enclosed_points(mesh, tolerance=1e-16)
-    inside = enclosed["SelectedPoints"].view(np.bool_)
-
-    nx, ny, nz = grid.dimensions
-    inside_cells = inside.reshape((nx - 1, ny - 1, nz - 1), order="F")
-
-    return inside_cells
-
-
-def make_grid(bounds, dims):
-    nx, ny, nz = dims
-    xmin, xmax, ymin, ymax, zmin, zmax = bounds
-
-    grid = pv.ImageData()
-    grid.dimensions = (nx, ny, nz)
-    grid.origin = (xmin, ymin, zmin)
-    grid.spacing = (
-        (xmax - xmin) / (nx - 1),
-        (ymax - ymin) / (ny - 1),
-        (zmax - zmin) / (nz - 1),
-    )
-    return grid
+def layer(x, y, z):
+    return jnp.where(z >= 0.5, 2, 1)
 
 
 N = 2  # Number of voxels in each direction
-bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)  # Boundaries of the domain
-grid = make_grid(bounds, (N + 1, N + 1, N + 1))
-
-box = pv.Box(bounds=bounds)
-inside_box = voxelize_on_grid(box, grid)
-
-# ------------------
-# Phase labeling
-# ------------------
-centers = grid.cell_centers().points
-phase = np.ones(centers.shape[0], dtype=np.uint8)
-
-# Condition : z < 0 -> 1, otherwise -> 2
-phase[centers[:, 2] >= 0] = 2
-grid.cell_data["phase"] = phase
-
-grid.save(
-    f"test_box_{N}.vti"
-)  # Laminate with normal between the materials in the z direction
-
-
-# -----------------------------------------------------------------------------
-# Mechanical computation using the solver
-# -----------------------------------------------------------------------------
-
-file_name = f"test_box_{N}.vti"
-grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
-
-
-# Define phase-wise properties based on grid.markers
-def piecewise_field(field, value_map, grid):
-    for index, value in value_map.items():
-        field = field.at[grid.markers == index, ...].set(value)
-    return field
-
+grid = Grid.from_function(shape=(N, N, N), marker_fn=layer)
 
 # Material parameters
 E1 = 1.0
@@ -132,7 +64,7 @@ if (
 ):
     # Reference medium for the AEM and A2EM solvers
     E0 = 1.0
-    nu0 = 0.3
+    nu0 = 0.15
 
 elif solver_used == MSSolver:
     # Reference medium for MS solver
@@ -154,10 +86,10 @@ C0 = IsotropicTensor4(kappa=lambda_0 + (2 / 3) * mu0, mu=mu0)
 
 
 # Material parameters mapping
-E_map = {1: E1, 2: E2}
-nu_map = {1: nu1, 2: nu2}
-E = piecewise_field(jnp.zeros(grid.shape), E_map, grid)
-nu = piecewise_field(jnp.zeros(grid.shape), nu_map, grid)
+materials = {1: {"E": E1, "nu": nu1}, 2: {"E": E2, "nu": nu2}}
+grid = grid.apply_material_map(materials)
+E = grid["E"]
+nu = grid["nu"]
 
 
 def elastic_law(eps, material_params):
@@ -177,10 +109,8 @@ def constitutive_law(eps, params):
 
 
 # Material parameters mapping of reference medium for Moulinec and Suquet's solver
-E0_map = {1: E0, 2: E0}
-nu0_map = {1: nu0, 2: nu0}
-E0 = piecewise_field(jnp.zeros(grid.shape), E0_map, grid)
-nu0 = piecewise_field(jnp.zeros(grid.shape), nu0_map, grid)
+E0 = jnp.full_like(E, E0)
+nu0 = jnp.full_like(nu, nu0)
 
 material_params_0 = (E0.ravel(), nu0.ravel())
 
@@ -230,11 +160,6 @@ def comput_num(E_array):
             eps, sig, info = solver(
                 E_macro, C_eps, C_eps_0, Gamma_0, tol=1e-6, max_iter=50
             )
-            print("Solver info:", info)  # ["num_steps"])
-            print(f"{solver.__name__} solver time", time() - tic)
-            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-            print("\n")
-
     elif solver_used == AEMSolver:
         # AEM solver
         for solver in [AEMSolver]:
@@ -242,13 +167,6 @@ def comput_num(E_array):
             eps_aux, eps, sig, info = solver(
                 E_macro, alpha, Gamma_0, tol=1e-6, max_iter=50
             )
-            print("Solver info:", info)  # ["num_steps"])
-            print(f"{solver.__name__} solver time", time() - tic)
-            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-            print("\n")
-            eps_aux_jnp = jnp.array(eps_aux)
-            pv_grid.cell_data["strain_aux"] = eps_aux_jnp.reshape((-1, 3, 3))
-            scale_f = 1.0
 
     elif solver_used == A2EMSolver:
         # A2EM solver
@@ -258,27 +176,17 @@ def comput_num(E_array):
                 E_macro,
                 alpha,
                 Gamma_0,
-                tol=1e-16,
+                tol=1e-6,
                 max_iter=200,
                 auto_scale=True,
                 verbose=True,
             )
-
-            print("Solver info:", info)  # ["num_steps"])
-            print(f"{solver.__name__} solver time", time() - tic)
-            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-            print("\n")
-            pv_grid.cell_data["strain_aux"] = eps_aux.reshape((-1, 3, 3))
 
     elif solver_used == KrylovAEMSolver:
         # Krylov-AEM solver
         for solver in [KrylovAEMSolver]:
             tic = time()
             eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1e-6, max_iter=50)
-            print("Solver info:", info)  # ["num_steps"])
-            print(f"{solver.__name__} solver time", time() - tic)
-            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-            print("\n")
 
     sig_mean_num = jnp.mean(sig, axis=[0, 1, 2])
 
@@ -323,30 +231,18 @@ lambda_param = jnp.max(eigenvalues) * secu
 
 n = [0, 0, 1]
 P = P_func(n)
+Id = SymmetricTensor4.identity().array
 
-I = SymmetricTensor4.identity().array
-
-A1 = jnp.linalg.inv(P + (lambda_param * (jnp.linalg.inv(C1 - lambda_param * I))))
-A2 = jnp.linalg.inv(P + (lambda_param * (jnp.linalg.inv(C2 - lambda_param * I))))
+A1 = jnp.linalg.inv(P + (lambda_param * (jnp.linalg.inv(C1 - lambda_param * Id))))
+A2 = jnp.linalg.inv(P + (lambda_param * (jnp.linalg.inv(C2 - lambda_param * Id))))
 A = A1 * 0.5 + A2 * 0.5
 
-C_lam = (I + (jnp.linalg.inv(jnp.linalg.inv(A) - P))) * lambda_param
-
-
-def to_3d(sig_array):
-    sig = jnp.array(
-        [
-            [sig_array[0], sig_array[3] / jnp.sqrt(2), sig_array[4] / jnp.sqrt(2)],
-            [sig_array[3] / jnp.sqrt(2), sig_array[1], sig_array[5] / jnp.sqrt(2)],
-            [sig_array[4] / jnp.sqrt(2), sig_array[5] / jnp.sqrt(2), sig_array[2]],
-        ]
-    )
-    return sig
+C_lam = (Id + (jnp.linalg.inv(jnp.linalg.inv(A) - P))) * lambda_param
 
 
 def comput_an(E_array):
     sig_array = jnp.einsum("ij,j->i", C_lam, jnp.array(E_array))
-    sig = to_3d(sig_array)
+    sig = SymmetricTensor2(array=sig_array)
     return sig
 
 
@@ -375,11 +271,6 @@ sig_num_zz = comput_num(E_array_zz)
 sig_num_xy = comput_num(E_array_xy)
 sig_num_xz = comput_num(E_array_xz)
 sig_num_yz = comput_num(E_array_yz)
-
-# print(2 / (0.5 * 1 / mu1 + 0.5 * 1 / mu2))
-
-# # print(sig_num_xz)
-# raise
 
 # Analytical stress solutions
 sig_an_xx = comput_an(E_array_xx)
