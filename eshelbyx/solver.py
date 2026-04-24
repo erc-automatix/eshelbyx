@@ -54,13 +54,14 @@ def A2EMSolver(
         W_new = (1 - 2 * lam_new) * W + lam_new * scale * Y
 
         eps0 = Gamma_0.apply_C0_inv(sig_new)
-        k_A2EM = ref_norm(eps0) / ref_norm(E_macro - eps_new)
+        E_norm = jnp.maximum(ref_norm(E_macro - eps_new), 1e-16)
+        k_A2EM = ref_norm(eps0) / E_norm
         new_scale = jax.lax.select(auto_scale, k_A2EM, 1.0)
 
         eps_aux_new = 0.5 * (eps0 / new_scale + eps_new)
 
         X_new = X - lam_new * Z + (1 / new_scale - 1 / scale) * W_new
-        Delta_new = ref_norm(X_new) / ref_norm(E_macro - eps_new)
+        Delta_new = ref_norm(X_new) / E_norm
         if verbose:
             jax.debug.print(
                 "Iteration {} ||X|| = {:.5e} Delta = {:.5e} ||sig|| = {:.5e} k_A2EM = {:.5e} lambda = {:.5e} scale = {:.5e}",
