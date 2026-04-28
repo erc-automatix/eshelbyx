@@ -22,6 +22,7 @@ from eshelbyx.discretization import (
 from eshelbyx.solver import AEMSolver
 
 from eshelbyx.grid import Grid, load_vtk_grid
+from eshelbyx.utils import flatten_batch_dims, reshape_batch_dims
 from jaxmat.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
 
 current_folder = Path(__file__).parent.resolve()
@@ -38,7 +39,7 @@ E0 = 1.0
 nu0 = 0.3
 lambda_0, mu0 = E0 * nu0 / (1 + nu0) / (1 - 2 * nu0), E0 / 2 / (1 + nu0)
 
-C0 = IsotropicTensor4(lambda_0 + 2 / 3 * mu0, mu0)
+C0 = IsotropicTensor4(kappa=lambda_0 + 2 / 3 * mu0, mu=mu0)
 
 E_macro = SymmetricTensor2(array=jnp.asarray([1.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
 
@@ -79,9 +80,9 @@ def elastic_law(eps, material_params):
 
 @eqx.filter_jit
 def constitutive_law(eps, params):
-    eps_flatten = eps.flatten_batch_dims()
+    eps_flatten = flatten_batch_dims(eps)
     sig_flatten = jax.vmap(elastic_law)(eps_flatten, params)
-    return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
+    return reshape_batch_dims(sig_flatten, grid.shape)
 
 
 def _apply_alpha(eps, material_params, C0):
@@ -100,39 +101,19 @@ def _apply_alpha(eps, material_params, C0):
     # kappa_tang = jnp.einsum("ijkl,klij", C_, SymmetricTensor4.J()) / 3.0
     # mu_tang = jnp.einsum("ijkl,klij", C_, SymmetricTensor4.K()) / 2.0
     # C_tang = IsotropicTensor4(kappa_tang, mu_tang)
+    C0_ = C0.to_symmetric()
     C_tang = C_
     # jax.debug.print("Ct = {}", C_.shape)
-    # alpha = ((C_tang + C0).inv @ C0) * 2.0
-    # sig = alpha.eval_jvp(eps)
-    iC = (C_tang + C0).inv
-    sig = jnp.einsum("ijkl,klmn,mn->ij", iC, 2 * C0, eps)
+    alpha = ((C_tang + C0_).inv @ C0_) * 2.0
+    sig = alpha @ eps
     return SymmetricTensor2(tensor=sig)
 
 
 @eqx.filter_jit
 def apply_alpha(eps, params, C0):
-    eps_flatten = eps.flatten_batch_dims()
-    sig_flatten = jax.vmap(_apply_alpha, in_axes=(0, 0, None))(eps_flatten, params, C0)
-    return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
-
-
-def _apply_ideltaC(eps, material_params, C0):
-    E, nu = material_params
-    lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
-    mu = E / 2 / (1 + nu)
-    C = IsotropicTensor4(lmbda + 2 / 3 * mu, mu)
-    alpha = (C - C0).inv
-    sig = alpha.eval_jvp(eps)
-    return SymmetricTensor2(tensor=sig)
-
-
-@eqx.filter_jit
-def apply_ideltaC(eps, params, C0):
-    eps_flatten = eps.flatten_batch_dims()
-    sig_flatten = jax.vmap(_apply_ideltaC, in_axes=(0, 0, None))(
-        eps_flatten, params, C0
-    )
-    return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
+    eps_flatten = SymmetricTensor2(tensor=jnp.asarray(eps).reshape(-1, 3, 3))
+    sig_tensor = jax.vmap(_apply_alpha, in_axes=(0, 0, None))(eps_flatten, params, C0)
+    return sig_tensor.tensor.reshape(eps.shape)
 
 
 Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=WillotDiscretization(grid))
@@ -147,7 +128,6 @@ E_macro_list = [
 ]
 alpha = lambda eps: apply_alpha(eps, material_params, C0)
 C_eps = lambda eps: constitutive_law(eps, material_params)
-ideltaC = lambda eps: apply_ideltaC(eps, material_params, C0)
 
 from jax import profiler
 
@@ -155,28 +135,14 @@ options = jax.profiler.ProfileOptions()
 # options.python_tracer_level = 1
 # options.host_tracer_level = 1
 profiler.start_trace("/tmp/jax_trace")
-from eshelbyx.krylov_solver import KrylovAEMSolver, KrylovLSSolver, CGLSSolver
+from eshelbyx.krylov_solver import KrylovAEMSolver
 from eshelbyx.nonlinear_krylov_solver import NewtonKrylovAEMSolver
 
 for E_macro in E_macro_list:
-    # solver = CGLSSolver
-    # tic = time()
-    # eps, sig, info = solver(
-    #     broadcast_to_grid(E_macro, grid),
-    #     C0,
-    #     C_eps,
-    #     ideltaC,
-    #     Gamma_0,
-    #     tol=1e-8,
-    # )
-    # print("Iterations", info["num_steps"])
-    # print(f"{solver.__name__} solver time", time() - tic)
-    # print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-
     for solver in [KrylovAEMSolver]:
         tic = time()
         eps, sig, info = solver(
-            broadcast_to_grid(E_macro, grid), C0, C_eps, alpha, Gamma_0, tol=1e-6
+            broadcast_to_grid(E_macro, grid), alpha, Gamma_0, tol=1e-6
         )
         print("Iterations", info["num_steps"])
         print(f"{solver.__name__} solver time", time() - tic)
