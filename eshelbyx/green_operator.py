@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 import lineax as lx
-from eshelbyx.tensors import (
+from jaxmat.tensors import (
     Tensor,
     SymmetricTensor2,
     IsotropicTensor4,
@@ -71,11 +71,11 @@ class GreenOperator(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     def apply_C0(self, eps):
-        return jnp.einsum("ijkl,...kl->...ij", self.C0, eps)
+        return jnp.einsum("ijkl,...kl->...ij", self.C0.to_symmetric(), eps)
 
     @eqx.filter_jit
     def apply_C0_inv(self, eps):
-        return jnp.einsum("ijkl,...kl->...ij", self.C0.inv, eps)
+        return jnp.einsum("ijkl,...kl->...ij", self.C0.inv.to_symmetric(), eps)
 
     def as_matrix(self):
         raise NotImplementedError("Matrix-free operator")

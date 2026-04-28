@@ -6,7 +6,7 @@ import jax
 from time import time
 
 jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_platform_name", "gpu")
+jax.config.update("jax_platform_name", "cpu")
 
 import jax.numpy as jnp
 import equinox as eqx
@@ -20,9 +20,10 @@ from eshelbyx.discretization import (
 )
 
 from eshelbyx.grid import load_vtk_grid
-from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4
+from jaxmat.tensors import SymmetricTensor2, IsotropicTensor4
 from eshelbyx.krylov_solver import KrylovAEMSolver
 from eshelbyx.solver import A2EMSolver, AEMSolver
+from eshelbyx.utils import flatten_batch_dims, reshape_batch_dims
 
 current_folder = Path(__file__).parent.resolve()
 
@@ -33,7 +34,7 @@ grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
 E0 = 1.0
 nu0 = 0.3
 lambda_0, mu0 = E0 * nu0 / (1 + nu0) / (1 - 2 * nu0), E0 / 2 / (1 + nu0)
-C0 = IsotropicTensor4(lambda_0 + 2 / 3 * mu0, mu0)
+C0 = IsotropicTensor4(kappa=lambda_0 + 2 / 3 * mu0, mu=mu0)
 
 
 # Define phase-wise properties based on grid.markers
@@ -65,26 +66,26 @@ def elastic_law(eps, material_params):
 
 @eqx.filter_jit
 def constitutive_law(eps, params):
-    eps_flatten = eps.flatten_batch_dims()
+    eps_flatten = flatten_batch_dims(eps)
     sig_flatten = jax.vmap(elastic_law)(eps_flatten, params)
-    return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
+    return reshape_batch_dims(sig_flatten, grid.shape)
 
 
 def _apply_alpha(eps, material_params, C0):
     E, nu = material_params
     lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
     mu = E / 2 / (1 + nu)
-    C = IsotropicTensor4(lmbda + 2 / 3 * mu, mu)
+    C = IsotropicTensor4(kappa=lmbda + 2 / 3 * mu, mu=mu)
 
     iC = (C + C0).inv
     alp = iC @ (C0 * 2.0)
-    sig = alp.eval_jvp(eps)  # here alp is a IsotropicTensor4
+    sig = alp @ eps
     return SymmetricTensor2(tensor=sig)
 
 
 @eqx.filter_jit
 def apply_alpha(eps, params, C0):
-    eps_flatten = jnp.asarray(eps).reshape(-1, 3, 3)
+    eps_flatten = SymmetricTensor2(tensor=jnp.asarray(eps).reshape(-1, 3, 3))
     sig_tensor = jax.vmap(_apply_alpha, in_axes=(0, 0, None))(eps_flatten, params, C0)
     return sig_tensor.tensor.reshape(eps.shape)
 

@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 from functools import partial
-from eshelbyx.tensors import SymmetricTensor2
+from jaxmat.tensors import SymmetricTensor2
 
 
 # @eqx.debug.assert_max_traces(max_traces=1)
@@ -15,11 +15,9 @@ def A2EMSolver(
     tol=1e-10,
     auto_scale=True,
     step_adaptation=True,
-    verbose=True
+    verbose=True,
 ):
 
-
-    
     # ------------------------
     # Helpers
     # ------------------------
@@ -32,18 +30,15 @@ def A2EMSolver(
     def projection_on_D(X):
         z = Gamma_0.apply_C0(X)
         return Gamma_0.mv(z)
-    
-    fact_sec = 1e-6     # used for homogenous solutions (eps = E_macro => k_A2EM explodes)
-      
 
     # ------------------------
     # One AEM iteration
     # ------------------------
     def step(carry):
         it, X, eps_aux, W, scale, Delta = carry
-        aX = alpha(X, scale)             
+        aX = alpha(X, scale)
         Y = projection_on_D(aX)
-        
+
         Z = aX - 2.0 * Y + 2 * W / scale
 
         if step_adaptation:
@@ -55,26 +50,25 @@ def A2EMSolver(
         eps_new = alpha(eps_aux_new, scale)
 
         sig_new = scale * Gamma_0.apply_C0(2.0 * eps_aux_new - eps_new)
-        
+
         W_new = (1 - 2 * lam_new) * W + lam_new * scale * Y
-        
 
         eps0 = Gamma_0.apply_C0_inv(sig_new)
-        k_A2EM = ref_norm(eps0) / (ref_norm(E_macro - eps_new)+fact_sec)
+        E_norm = jnp.maximum(ref_norm(E_macro - eps_new), 1e-16)
+        k_A2EM = ref_norm(eps0) / E_norm
         new_scale = jax.lax.select(auto_scale, k_A2EM, 1.0)
 
         eps_aux_new = 0.5 * (eps0 / new_scale + eps_new)
-        
 
         X_new = X - lam_new * Z + (1 / new_scale - 1 / scale) * W_new
-        Delta_new = ref_norm(X_new) / (ref_norm(E_macro - eps_new)+fact_sec)
+        Delta_new = ref_norm(X_new) / E_norm
         if verbose:
             jax.debug.print(
                 "Iteration {} ||X|| = {:.5e} Delta = {:.5e} ||sig|| = {:.5e} k_A2EM = {:.5e} lambda = {:.5e} scale = {:.5e}",
                 it,
                 ref_norm(X) / ref_norm(E_macro),
                 Delta_new,
-                jnp.mean(sig_new[..., 0, 0]),
+                jnp.mean(jnp.linalg.matrix_norm(sig_new)),
                 k_A2EM,
                 lam_new,
                 new_scale,
@@ -126,7 +120,7 @@ def A2EMSolver(
         "scale_final": scale_f,
     }
 
-    return eps_aux_f, eps, sigma, convergence_history, scale_f
+    return eps, sigma, convergence_history
 
 
 def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
@@ -158,8 +152,8 @@ def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
-    X = E_macro
-    eps_aux = SymmetricTensor2(tensor=jnp.zeros_like(E_macro))
+    X = jnp.asarray(E_macro)
+    eps_aux = jnp.zeros_like(E_macro)
     lam = 0.0
 
     # E_norm = ref_norm(E_macro)
@@ -210,10 +204,10 @@ def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
                 i,
                 ref_norm(X) / ref_norm(E_macro),
                 Delta,
-                jnp.mean(sig[..., 0, 0]),
+                jnp.mean(jnp.linalg.matrix_norm(sig)),
                 lam_new,
             )
-        return i + 1, X.sym, eps_aux_new.sym, lam_new, Delta, convergence_history
+        return i + 1, X, eps_aux_new, lam_new, Delta, convergence_history
 
     # ------------------------------------------------------------------
     # Run
@@ -228,10 +222,10 @@ def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
     # ------------------------------------------------------------------
     eps = alpha(eps_aux_f)
     sigma = Gamma_0.apply_C0(2.0 * eps_aux_f - eps)
-    
+
     convergence_history["iterations"] = i_final
 
-    return eps_aux_f, eps, sigma, convergence_history
+    return eps, sigma, convergence_history
 
 
 def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=True):
@@ -258,8 +252,7 @@ def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=
     # Initialisation
     # ------------------------------------------------------------------
     X = E_macro
-    eps = SymmetricTensor2(tensor=jnp.zeros_like(E_macro))
-
+    eps = jnp.zeros_like(E_macro)
 
     convergence_history = {
         # "residual": jnp.zeros((max_iter,)),
@@ -271,12 +264,12 @@ def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=
     # Loop
     # ------------------------------------------------------------------
     def cond_fun(state):
-        i, _, Delta, _,_ = state
+        i, _, Delta, _, _ = state
         return jnp.logical_and(i < max_iter, Delta >= tol)
 
     def body_fun(state):
         i, X, Delta, eps, convergence_history = state
-        tau = C_eps(eps)-C_eps_0(eps)
+        tau = C_eps(eps) - C_eps_0(eps)
         X = E_macro - eps - Gamma_0.mv(tau)
         Delta = ref_norm(X) / ref_norm(E_macro)
         eps = eps + X
@@ -296,9 +289,9 @@ def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=
                 "Iteration {}  Delta = {:.5e} ||sig|| = {:.5e}",
                 i,
                 Delta,
-                jnp.mean(sig[..., 0, 0]),
+                jnp.mean(jnp.linalg.matrix_norm(sig)),
             )
-        return i + 1, X.sym, Delta, eps.sym, convergence_history
+        return i + 1, X, Delta, eps, convergence_history
 
     # ------------------------------------------------------------------
     # Run
@@ -314,11 +307,7 @@ def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=
     sig = C_eps(eps)
     eps = eps.tensor.reshape((-1, 3, 3))
     sig = sig.tensor.reshape((-1, 3, 3))
-    
-    
+
     convergence_history["iterations"] = i_final
 
     return eps, sig, convergence_history
-
-
-
