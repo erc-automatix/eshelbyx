@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 import lineax as lx
-from jaxmat.tensors import SymmetricTensor2
 
 
 class AbstractLSOperator(lx.AbstractLinearOperator):

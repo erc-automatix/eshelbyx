@@ -389,6 +389,7 @@ def load_vtk_grid(filename, marker_name=None):
 
     grid = Grid(
         markers=jnp.asarray(phase),
+        shape=(int(nx), int(ny), int(nz)),
         size=jnp.array([Lx, Ly, Lz], dtype=jnp.float64),
     )
 
