@@ -44,18 +44,19 @@ N = 64
 bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)
 dx = (bounds[1] - bounds[0]) / N
 
-
+# A field
 A_data = pv_grid.cell_data["A"]
 A = jnp.array(A_data).reshape(grid.shape)
 
+# B field
 B_data = pv_grid.cell_data["B"]
 B = jnp.array(B_data).reshape(grid.shape)
 
-
+# Reference A 
 A0 = (jnp.max(A)+jnp.min(A))/2
 
-# Data extraction : damage init
-damage_init_data = pv_grid.cell_data["damage"]
+# Data extraction : damage init (=0)
+damage_init_data = pv_grid.cell_data["damage_init"]
 damage_init = jnp.array(damage_init_data).reshape(grid.shape)
 
 
@@ -68,7 +69,7 @@ if solver_used == damage_Feugueur_solver:
     # Solver
     for solver in [damage_Feugueur_solver]:
         tic = time()
-        d = solver(damage_init, A, B, A0, Gamma_0, max_iter = 500, tol=1e-6, verbose=True)
+        d = solver(damage_init, A, B, A0, Gamma_0, max_iter = 2000, tol=1e-6, verbose=True)
         print(f"{solver.__name__} solver time", time() - tic)
         print("\n")
 
@@ -92,7 +93,7 @@ if solver_used == damage_EAEM_solver:
     # Solver
     for solver in [damage_EAEM_solver]:
         tic = time()
-        d = solver(damage_init, A, B, A0, Gamma_0, max_iter = 150, tol=1e-6, verbose=True)
+        d = solver(damage_init, A, B, A0, Gamma_0, max_iter = 2000, tol=1e-6, verbose=True)
         print(f"{solver.__name__} solver time", time() - tic)
         print("\n")
         

@@ -767,35 +767,34 @@ def test_laminate_box():
 
 def damage_num():
     """
-    Voxelized geometry for the AT2 damage model without loading
+    Voxelized geometry for the AT2 damage model
     """
-    N = 32
-    #Gc = 1.0
-    k = 2
+    
+    N = 64  # Number of voxels per direction
+    k = 1000    # Scalar parameter used to amplify the amplitude of the A field
     bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)
     grid = make_grid(bounds, (N + 1, N + 1, N + 1))
     
     # Voxels centers coordinates
-    L = (bounds[1] - bounds[0])
+    L = (bounds[1] - bounds[0]) # Length of the domain
     dx = L / N
-    #lc = dx*5
     xc = bounds[0] + (np.arange(N) + 0.5) * dx
     yc = bounds[2] + (np.arange(N) + 0.5) * dx
     zc = bounds[4] + (np.arange(N) + 0.5) * dx
-    Xc, Yc, Zc = np.meshgrid(xc, yc, zc, indexing='ij')
+    Xc, Yc, Zc = np.meshgrid(xc, yc, zc, indexing='ij') # Coordinates of the voxels centers
     
     
-    # Damage = 0 
-    damage = np.zeros((N, N, N), dtype=np.float64)
-    grid.cell_data["damage"] = damage.flatten(order="F")
+    # Initial damage = 0 
+    damage_init = np.zeros((N, N, N), dtype=np.float64)
+    grid.cell_data["damage_init"] = damage_init.flatten(order="F")
     
-    # Damage an 
+    # Analytical damage
     damage_an = np.zeros((N, N, N), dtype=np.float64)
-    damage_an = jnp.sin(2*Zc*jnp.pi/L)
+    damage_an = jnp.sin(2*Zc*jnp.pi/L)  # Sinus
     grid.cell_data["damage_an"] = damage_an.flatten(order="F")
     
-    damage_second = -(4*(jnp.pi**2)/(L**2))*damage_an
-    A = 10*jnp.sin(2*Zc*jnp.pi/L) + k
+    damage_second = -(4*(jnp.pi**2)/(L**2))*damage_an   # Second derivative of analytical damage
+    A = k*jnp.sin(2*Zc*jnp.pi/L) + k +1
     B = (A*damage_an) - damage_second
     
     grid.cell_data["A"] = A.flatten(order="F")

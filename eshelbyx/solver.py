@@ -331,12 +331,15 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=
     # Helper functions
     # --------------------------
     
+    # FFT operator : X/(A0 + ξ.ξ)
     def OperatorFFT(X):
         return Gamma_0.mv(X)
     
+    # L2 norm of the field X
     def norm2(X):
         return jnp.sqrt(jnp.sum(X**2))
     
+    # Projector : d -> [0,1] (unused for now)
     def projector_damage(d):
         return jnp.clip(d, 0.0, 1.0)
     
@@ -398,24 +401,28 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=1e-6
     # Helper functions
     # --------------------------
     
+    # FFT operator : X/(A0 + ξ.ξ)
     def OperatorFFT(X):
         return Gamma_0.mv(X)
     
+    # L2 norm of the field X
     def norm2(X):
         return jnp.sqrt(jnp.sum(X**2))
     
+    # Projector : d -> [0,1] (unused for now)
     def projector_damage(d):
         return jnp.clip(d, 0.0, 1.0)
     
     
-    alpha = 2*A0/(A+A0)
+    alpha = 2*A0/(A+A0)     # Auxiliar parameter in [0,2]
+    #alpha = 1.0
     
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
     d_aux = damage_init*0
     X = OperatorFFT(B)
-    lmbda = 1.0
+    lmbda = 1.0     # Scalar parameter used to minimize the residual at each iteration
     
     convergence_history = {
         "err": jnp.zeros((max_iter,)),
@@ -433,14 +440,15 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=1e-6
     def body_fun(state):
         i, d_aux, X, _, err, convergence_history = state
         Z = alpha*X + OperatorFFT(2*A0*(1-alpha)*X)
-        lmbda = jnp.sum(X**2)/jnp.sum(X*Z)
-        #lmbda = 1.0
+        #Z = alpha*X + OperatorFFT((A-A0)*alpha*X)
+        lmbda = jnp.sum(X*Z)/jnp.sum(Z**2)
         X_new = X - lmbda*Z
         d_aux_new = d_aux + lmbda*X
-        
-        #err = norm2(X_new-X)/norm2(X_new)
-        err = norm2(X_new)
-        
+    
+        #err = norm2(X_new)
+        d = alpha*d_aux
+        d_new = alpha*d_aux_new
+        err = norm2(d_new-d)/norm2(d_new)
         
         convergence_history["err"] = convergence_history["err"].at[i].set(err)
         if verbose:
@@ -477,12 +485,15 @@ def damage_naive_solver(damage_init, A, B, Gamma_0, max_iter = 1000, tol=1e-6, v
     # Helper functions
     # --------------------------
     
+    # FFT operator : X/(A0 + ξ.ξ)
     def OperatorFFT(X):
         return Gamma_0.mv(X)
     
+    # L2 norm of the field X
     def norm2(X):
         return jnp.sqrt(jnp.sum(X**2))
     
+    # Projector : d -> [0,1] (unused for now)
     def projector_damage(d):
         return jnp.clip(d, 0.0, 1.0)
     
