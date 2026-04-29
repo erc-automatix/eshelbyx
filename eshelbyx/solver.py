@@ -345,7 +345,6 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=
     # Initialisation
     # ------------------------------------------------------------------
     xi = B - ((A-A0)*damage_init)
-    #xi = 0*damage_init
     
     convergence_history = {
         "err": jnp.zeros((max_iter,)),
@@ -385,10 +384,87 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=
     i_final, d_final, _, _, convergence_history = jax.lax.while_loop(
         cond_fun, body_fun, init_state
     )
-
-
+    
     return d_final
   
+
+
+def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=1e-6, verbose=True):
+    """
+    Damage solver with EAEM methodology
+    """
+    
+    # --------------------------
+    # Helper functions
+    # --------------------------
+    
+    def OperatorFFT(X):
+        return Gamma_0.mv(X)
+    
+    def norm2(X):
+        return jnp.sqrt(jnp.sum(X**2))
+    
+    def projector_damage(d):
+        return jnp.clip(d, 0.0, 1.0)
+    
+    
+    alpha = 2*A0/(A+A0)
+    
+    # ------------------------------------------------------------------
+    # Initialisation
+    # ------------------------------------------------------------------
+    d_aux = damage_init*0
+    X = OperatorFFT(B)
+    lmbda = 1.0
+    
+    convergence_history = {
+        "err": jnp.zeros((max_iter,)),
+    }
+    
+    
+    # ------------------------------------------------------------------
+    # Loop
+    # ------------------------------------------------------------------
+    def cond_fun(state):
+        i, _, _, _, err, _ = state
+        return jnp.logical_and(i < max_iter, err >= tol)
+    
+    
+    def body_fun(state):
+        i, d_aux, X, _, err, convergence_history = state
+        Z = alpha*X + OperatorFFT(2*A0*(1-alpha)*X)
+        lmbda = jnp.sum(X**2)/jnp.sum(X*Z)
+        #lmbda = 1.0
+        X_new = X - lmbda*Z
+        d_aux_new = d_aux + lmbda*X
+        
+        #err = norm2(X_new-X)/norm2(X_new)
+        err = norm2(X_new)
+        
+        
+        convergence_history["err"] = convergence_history["err"].at[i].set(err)
+        if verbose:
+            jax.debug.print(
+                "Iteration {}  err = {:.5e} lmbda = {:.5e}",
+                i,
+                err,
+                lmbda,
+            )
+        return i + 1, d_aux_new, X_new, lmbda, err, convergence_history
+    
+    
+    # ------------------------------------------------------------------
+    # Run
+    # ------------------------------------------------------------------
+    init_state = (0, d_aux, X, lmbda, jnp.inf, convergence_history)
+    i_final, d_aux_final, _, _, _, convergence_history = jax.lax.while_loop(
+        cond_fun, body_fun, init_state
+    )
+    
+    d_final = alpha*d_aux_final
+    
+    return d_final
+
 
 
 
