@@ -71,6 +71,12 @@ class DiscretizationScheme(eqx.Module):
         )
 
 
+    def apply_laplacian(self, c_hat):
+        return jnp.sum(self.D_plus * self.D_plus, axis=-1) * c_hat
+    
+        
+    
+
 class MoulinecSuquetDiscretization(DiscretizationScheme):
     def _D(self, xi, grid):
         return 1j * xi
