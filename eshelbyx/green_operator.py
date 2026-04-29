@@ -88,8 +88,127 @@ class GreenOperator(lx.AbstractLinearOperator):
 
     def out_structure(self):
         return self.in_structure()
+    
+    
+  
+"""
+class DamageGreenOperator(lx.AbstractLinearOperator):
+    grid: eqx.Module
+    discretization: DiscretizationScheme
+    
+    def __init__(self, grid, discretization):
+        self.grid = grid
+        self.discretization = discretization
+    
+    @partial(jax.remat, prevent_cse=False)
+    def _Gamma_0_func_impl(self, X):
+        
+        with jax.named_scope("Gamma0/fft"):
+            X_hat = jnp.fft.fftn(X)
+            
+        with jax.named_scope("Gamma0/laplacian"):
+            Y_hat = self.discretization.apply_laplacian(1.0)
+            
+        with jax.named_scope("Gamma0/assemble"):
+            lc = 0.15151515151515152
+            L = 1.0
+            Z_0 = (4*lc/L)*(1-jnp.exp(-L/(2*lc)))
+            singular_mask = self.discretization.singular_mask
+            Z_hat = jnp.where(singular_mask, Z_0, X_hat / (lc**2) / Y_hat)
+            
+        with jax.named_scope("Gamma0/ifft"):
+            out = jnp.fft.ifftn(Z_hat).real
+            return out
+        
+        
+    def Gamma_0_func(self, Y):
+        return self._Gamma_0_func_impl(Y)
+    
+    @eqx.filter_jit
+    def mv(self, vector, out=None):
+        return self.Gamma_0_func(vector)
+
+
+    def as_matrix(self):
+        raise NotImplementedError("Matrix-free operator")
+
+    def transpose(self):
+        return self  # FIXME
+
+    def in_structure(self):
+        return jax.ShapeDtypeStruct(shape=self.grid.shape, dtype=jnp.float64)
+
+    def out_structure(self):
+        return self.in_structure()
+
+"""
+class DamageGreenOperator(lx.AbstractLinearOperator):
+    grid: eqx.Module
+    discretization: DiscretizationScheme
+    A0 : float
+    
+    def __init__(self, grid, discretization, A0):
+        self.grid = grid
+        self.discretization = discretization
+        self.A0 = A0
+    
+    
+    @partial(jax.remat, prevent_cse=False)
+    def _Gamma_0_func_impl(self, X):
+        
+        with jax.named_scope("Gamma0/fft"):
+            X_hat = jnp.fft.fftn(X)
+            
+        with jax.named_scope("Gamma0/laplacian"):
+            Y_hat = self.discretization.apply_laplacian(1.0)
+            
+        with jax.named_scope("Gamma0/assemble"):
+            A0 = self.A0
+            Z_hat = X_hat / (A0-Y_hat)
+            
+        with jax.named_scope("Gamma0/ifft"):
+            out = jnp.fft.ifftn(Z_hat).real
+            return out
+    """
+    @partial(jax.remat, prevent_cse=False)
+    def _Gamma_0_func_impl(self, X):
+        
+        with jax.named_scope("Gamma0/fft"):
+            X_hat = jnp.fft.fftn(X)
+            
+        with jax.named_scope("Gamma0/laplacian"):
+            Y_hat = self.discretization.apply_laplacian(X_hat)
+            
+        with jax.named_scope("Gamma0/ifft"):
+            out = jnp.fft.ifftn(Y_hat).real
+            return out
+     """  
+        
+    def Gamma_0_func(self, Y):
+        return self._Gamma_0_func_impl(Y)
+    
+    @eqx.filter_jit
+    def mv(self, vector, out=None):
+        return self.Gamma_0_func(vector)
+
+
+    def as_matrix(self):
+        raise NotImplementedError("Matrix-free operator")
+
+    def transpose(self):
+        return self  # FIXME
+
+    def in_structure(self):
+        return jax.ShapeDtypeStruct(shape=self.grid.shape, dtype=jnp.float64)
+
+    def out_structure(self):
+        return self.in_structure()
 
 
 @lx.is_symmetric.register(GreenOperator)
+def _(operator):
+    return False
+
+@lx.is_symmetric.register(DamageGreenOperator)
 def _(operator):
     return False
