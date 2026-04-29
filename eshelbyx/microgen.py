@@ -652,96 +652,6 @@ def main_Hashin_num():
     
     
 
-def test_laminate_box():
-    """
-    2 boxes-geometry for test
-    """
-    
-    N = 1
-    tol = 1e-6
-    bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)
-    bounds_hybrid = (-tol, tol, -0.5, 0.5, -0.5, 0.5)
-    grid = make_grid(bounds, (N + 1, N + 1, N + 1))
-    
-    # Premier pavé (en bas sur X)
-    box = pv.Box(bounds=bounds)
-    box_hybrid = pv.Box(bounds = bounds_hybrid)
-    inside_box = voxelize_on_grid(box, grid)
-    inside_hybrid = voxelize_on_grid(box_hybrid, grid)
-    
-
-    # ------------------
-    # Phase labeling
-    # ------------------
-    phase = np.zeros_like(inside_box, dtype=np.uint8)
-    
-    centers = grid.cell_centers().points
-
-    phase = np.ones(centers.shape[0], dtype=np.uint8)
-    
-    # Condition : x < 0 -> 0, otherwise -> 1
-    phase[centers[:, 0] >= 0] = 2
-    
-    grid.cell_data["phase"] = phase.flatten(order = "F")
-    
-    
-    # -------------------------------------------
-    # Hybrid voxel labeling (hybrid or not)
-    # -------------------------------------------
-    bool_hybrid = np.zeros_like(inside_box, dtype=bool)
-    bool_hybrid[inside_hybrid] = True
-    
-    grid.cell_data["bool_hybrid"] = bool_hybrid.flatten(order="F")
-        
-    
-    # ------------------
-    # Phases int and ext
-    # ------------------
-    phases_couple = np.zeros((*inside_box.shape, 2), dtype=int)
-    phases_couple[inside_hybrid] = (1,2)
-    
-    grid.cell_data["phases_couple"] = phases_couple.reshape(-1, 2, order="F")
-       
-    
-    
-    #------------------------------------------------------------------------------------------------------------------
-    # Volumic fraction labeling of the internal material,
-    # if voxel at the edge between pore and coating, volumic fraction of the pore (the internal material of the voxel,
-    # =1 for non-hybrid voxels
-    #  + Local normal for each voxel in cartesian coordinates
-    # -----------------------------------------------------------------------------------------------------------------
-    volumic_fraction = np.ones_like(inside_box, dtype=float)
-    local_cartesian_normal = np.zeros(inside_box.shape + (3,), dtype=float)
-
-    indices = np.argwhere(bool_hybrid)
-    
-    
-    for i, j, k in indices:
-        local_cartesian_normal[i,j,k] = [1,0,0]
-        volumic_fraction[i, j, k] = 0.5
-    
-        
-            
-    
-    grid.cell_data["volumic_fraction"] = volumic_fraction.flatten(order="F")
-    grid.cell_data["local_cartesian_normal"] = local_cartesian_normal.reshape((-1, 3), order="F")
-    
-    local_x = local_cartesian_normal.reshape((-1, 3), order="F")[:, 0]
-    grid.cell_data["local_cartesian_normal_x"] = local_x
-    
-    local_y = local_cartesian_normal.reshape((-1, 3), order="F")[:, 1]
-    grid.cell_data["local_cartesian_normal_y"] = local_y
-    
-    local_z = local_cartesian_normal.reshape((-1, 3), order="F")[:, 2]
-    grid.cell_data["local_cartesian_normal_z"] = local_z
-    
-    
-    
-    grid.save(f"results/test_laminate_box_{N}.vti") 
-    return grid, phase
-    
-
-
 def main_multigrid_single_voxel():
     """
     Voxelized box with all phases = 0 except center voxel with phase = 1 
@@ -853,13 +763,53 @@ def test_laminate_box():
     return grid, phase
 
 
+
+
+def damage_num():
+    """
+    Voxelized geometry for the AT2 damage model without loading
+    """
+    N = 32
+    #Gc = 1.0
+    k = 2
+    bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)
+    grid = make_grid(bounds, (N + 1, N + 1, N + 1))
+    
+    # Voxels centers coordinates
+    L = (bounds[1] - bounds[0])
+    dx = L / N
+    #lc = dx*5
+    xc = bounds[0] + (np.arange(N) + 0.5) * dx
+    yc = bounds[2] + (np.arange(N) + 0.5) * dx
+    zc = bounds[4] + (np.arange(N) + 0.5) * dx
+    Xc, Yc, Zc = np.meshgrid(xc, yc, zc, indexing='ij')
+    
+    
+    # Damage = 0 
+    damage = np.zeros((N, N, N), dtype=np.float64)
+    grid.cell_data["damage"] = damage.flatten(order="F")
+    
+    # Damage an 
+    damage_an = np.zeros((N, N, N), dtype=np.float64)
+    damage_an = jnp.sin(2*Zc*jnp.pi/L)
+    grid.cell_data["damage_an"] = damage_an.flatten(order="F")
+    
+    damage_second = -(4*(jnp.pi**2)/(L**2))*damage_an
+    A = 10*jnp.sin(2*Zc*jnp.pi/L) + k
+    B = (A*damage_an) - damage_second
+    
+    grid.cell_data["A"] = A.flatten(order="F")
+    grid.cell_data["B"] = B.flatten(order="F")
+    
+    
+    grid.save(f"results/damage_num_{N}.vti") 
+    
+    
+
 #main_3_phases()
 #main_Hashin_an()
-main_Hashin_num()
+#main_Hashin_num()
 #main_multigrid_single_voxel()
 #test_laminate_box()
-
-
-
-
+damage_num()
 
