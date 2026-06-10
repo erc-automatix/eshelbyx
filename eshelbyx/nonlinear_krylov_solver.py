@@ -87,10 +87,11 @@ def newton_solve_jittable(
 
 
 import equinox as eqx
-from eshelbyx.krylov_solver import AEMAuxOperator, LSOperator
-from eshelbyx.tensors import SymmetricTensor2
+from eshelbyx.krylov_solver import AEMAuxOperator
+from jaxmat.tensors import SymmetricTensor2
 
 
+# FIXME: not working, need to rethink interaction with tensors
 def NewtonKrylovAEMSolver(
     E_macro, C0, constitutive_law, alpha_tang, Gamma_0, max_iter=100, tol=1e-6
 ):
@@ -103,11 +104,12 @@ def NewtonKrylovAEMSolver(
         eps_ = SymmetricTensor2(tensor=eps.reshape(base_shape))
         sig = constitutive_law(eps_)
         z = sig - Gamma_0.apply_C0(eps_)
-        z_ = (
-            SymmetricTensor2(tensor=Gamma_0.mv(z))
-            .flatten_batch_dims()
-            .tensor.reshape((-1, 9))
-        )
+        z_ = Gamma_0.mv(z)
+        # (
+        #     SymmetricTensor2(tensor=Gamma_0.mv(z))
+        #     .flatten_batch_dims()
+        #     .tensor.reshape((-1, 9))
+        # )
         X = eps_ + z_ - E_macro
         return X, sig
 

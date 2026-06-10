@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 import lineax as lx
-from eshelbyx.tensors import SymmetricTensor2
 
 
 class AbstractLSOperator(lx.AbstractLinearOperator):
@@ -91,7 +90,7 @@ def KrylovAEMSolver(E_macro, alpha, Gamma_0, max_iter=100, tol=1e-6, options=Non
         solver=solver,
     )
 
-    eps_aux = SymmetricTensor2(tensor=sol.value)
+    eps_aux = sol.value
     eps = alpha(eps_aux)
 
     sigma = Gamma_0.apply_C0(2.0 * eps_aux - eps)

@@ -22,7 +22,7 @@ from eshelbyx.discretization import (
 
 
 from eshelbyx.grid import load_vtk_grid
-from eshelbyx.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
+from jaxmat.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
 from eshelbyx.krylov_solver import KrylovAEMSolver
 from eshelbyx.solver import A2EMSolver, AEMSolver, MSSolver
 
@@ -32,12 +32,11 @@ current_folder = Path(__file__).parent.resolve()
 # Hybrid voxels treatment depending on the strategy
 strat_hybrid = "laminate"
 
-# Solver 
+# Solver
 solver_used = A2EMSolver
 
 # Discretization
 discretization_used = WillotDiscretization
-
 
 
 # Micro-structure created with microgen.py"
@@ -45,12 +44,12 @@ file_name = "eshelbyx/results/test_laminate_1.vti"
 grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
 
 
-
 # Define phase-wise properties based on grid.markers
 def piecewise_field(field, value_map, grid):
     for index, value in value_map.items():
         field = field.at[grid.markers == index, ...].set(value)
     return field
+
 
 # Equivalent of "piecewise_field" function but for phases couples (concerning hybrid voxels)
 def piecewise_field_couple(field, value_map, markers):
@@ -63,12 +62,9 @@ def piecewise_field_couple(field, value_map, markers):
     return field
 
 
-
-
-# Data extraction : local normal 
+# Data extraction : local normal
 local_normal_data = pv_grid.cell_data["local_cartesian_normal"]
 local_normal = jnp.array(local_normal_data)
-
 
 
 E1 = 1
@@ -81,26 +77,28 @@ E0 = 1.0
 nu0 = 0.3
 
 
-
 # Reference medium stiffness tensor written using the IsotropicTensor4 class
 lambda_0, mu0 = E0 * nu0 / (1 + nu0) / (1 - 2 * nu0), E0 / 2 / (1 + nu0)
-C0 = IsotropicTensor4(kappa=lambda_0 + (2 / 3) * mu0, mu = mu0)
+C0 = IsotropicTensor4(kappa=lambda_0 + (2 / 3) * mu0, mu=mu0)
 
-# Reference medium stiffness tensor written using the SymmetricTensor4 class 
+
+# Reference medium stiffness tensor written using the SymmetricTensor4 class
 def C_sym_func(lmbda, mu):
-    C_sym_array = jnp.array([
-        [lmbda + 2*mu, lmbda,         lmbda,         0,     0,     0],
-        [lmbda,         lmbda + 2*mu, lmbda,         0,     0,     0],
-        [lmbda,         lmbda,         lmbda + 2*mu, 0,     0,     0],
-        [0,           0,           0,           2*mu,  0,     0],
-        [0,           0,           0,           0,     2*mu,  0],
-        [0,           0,           0,           0,     0,     2*mu],
-    ])
+    C_sym_array = jnp.array(
+        [
+            [lmbda + 2 * mu, lmbda, lmbda, 0, 0, 0],
+            [lmbda, lmbda + 2 * mu, lmbda, 0, 0, 0],
+            [lmbda, lmbda, lmbda + 2 * mu, 0, 0, 0],
+            [0, 0, 0, 2 * mu, 0, 0],
+            [0, 0, 0, 0, 2 * mu, 0],
+            [0, 0, 0, 0, 0, 2 * mu],
+        ]
+    )
     C_sym = SymmetricTensor4(array=C_sym_array)
     return C_sym
 
-C0_aniso = C_sym_func(lambda_0, mu0)
 
+C0_aniso = C_sym_func(lambda_0, mu0)
 
 
 # Material parameters mapping
@@ -125,27 +123,26 @@ phases_couple_data = pv_grid.cell_data["phases_couple"]
 phases_couple = jnp.array(phases_couple_data)
 
 
-# Internal and external material parameters mapping. For hybrid voxels, internal part of the voxel is the one closer to (0,0,0) 
+# Internal and external material parameters mapping. For hybrid voxels, internal part of the voxel is the one closer to (0,0,0)
 n_cells = phases_couple.shape[0]
 
-E_int_map = {(1,2): E1}
-nu_int_map = {(1,2): nu1}
-E_int = piecewise_field_couple(jnp.zeros(n_cells),E_int_map,phases_couple)
-nu_int = piecewise_field_couple(jnp.zeros(n_cells),nu_int_map,phases_couple)
+E_int_map = {(1, 2): E1}
+nu_int_map = {(1, 2): nu1}
+E_int = piecewise_field_couple(jnp.zeros(n_cells), E_int_map, phases_couple)
+nu_int = piecewise_field_couple(jnp.zeros(n_cells), nu_int_map, phases_couple)
 
-E_ext_map = {(1,2): E2}
-nu_ext_map = {(1,2): nu2}
-E_ext = piecewise_field_couple(jnp.zeros(n_cells),E_ext_map,phases_couple)
-nu_ext = piecewise_field_couple(jnp.zeros(n_cells),nu_ext_map,phases_couple)
+E_ext_map = {(1, 2): E2}
+nu_ext_map = {(1, 2): nu2}
+E_ext = piecewise_field_couple(jnp.zeros(n_cells), E_ext_map, phases_couple)
+nu_ext = piecewise_field_couple(jnp.zeros(n_cells), nu_ext_map, phases_couple)
 
 
 pv_grid.cell_data["E_int"] = E_int.flatten()
 pv_grid.cell_data["E_ext"] = E_ext.flatten()
 
 
-
 def elastic_law(eps, material_params):
-    #Elastic law at the material point level. Takes a `SymmetricTensor2` as strain input and outputs stress as a `SymmetricTensor2`.
+    # Elastic law at the material point level. Takes a `SymmetricTensor2` as strain input and outputs stress as a `SymmetricTensor2`.
     E, nu = material_params
     lmbda = E * nu / (1 + nu) / (1 - 2 * nu)
     mu = E / 2 / (1 + nu)
@@ -165,16 +162,16 @@ E0_map = {0: E0, 1: E0, 2: E0}
 nu0_map = {0: nu0, 1: nu0, 2: nu0}
 E0 = piecewise_field(jnp.zeros(grid.shape), E0_map, grid)
 nu0 = piecewise_field(jnp.zeros(grid.shape), nu0_map, grid)
-    
+
 material_params_0 = (E0.ravel(), nu0.ravel())
-    
+
 C_eps_0 = lambda eps: constitutive_law(eps, material_params_0)
 
 
 # Maximum eigenvalue of the stiffness matrices used for the laminate hybrid voxels strategy
-secu = 2    # Safety parameter
-eigenvalues = jnp.array([E1,E2])
-lambda_param = jnp.max(eigenvalues)*secu
+secu = 2  # Safety parameter
+eigenvalues = jnp.array([E1, E2])
+lambda_param = jnp.max(eigenvalues) * secu
 
 
 # Eshelby 4th-order tensor computed with the local cartesian normal n and used for the laminate hybrid voxels strategy
@@ -183,37 +180,29 @@ def P_func(n):
     delta = jnp.eye(3)
 
     # Construction du tenseur P_ijkl (3x3x3x3)
-    term1 = jnp.einsum('i,jl,m->ijlm', n, delta, n)
-    term2 = jnp.einsum('i,jm,l->ijlm', n, delta, n)
-    term3 = jnp.einsum('j,il,m->ijlm', n, delta, n)
-    term4 = jnp.einsum('j,im,l->ijlm', n, delta, n)
+    term1 = jnp.einsum("i,jl,m->ijlm", n, delta, n)
+    term2 = jnp.einsum("i,jm,l->ijlm", n, delta, n)
+    term3 = jnp.einsum("j,il,m->ijlm", n, delta, n)
+    term4 = jnp.einsum("j,im,l->ijlm", n, delta, n)
 
-    P4 = 0.5 * (term1 + term2 + term3 + term4) \
-         - jnp.einsum('i,j,l,m->ijlm', n, n, n, n)
+    P4 = 0.5 * (term1 + term2 + term3 + term4) - jnp.einsum("i,j,l,m->ijlm", n, n, n, n)
 
     # Order (6x6)
-    order = jnp.array([
-        [0,0],
-        [1,1],
-        [2,2],
-        [0,1],
-        [0,2],
-        [1,2]
-    ])
+    order = jnp.array([[0, 0], [1, 1], [2, 2], [0, 1], [0, 2], [1, 2]])
 
     # Construction matrice 6x6
     P_array = P4[
-        order[:,0][:,None],
-        order[:,1][:,None],
-        order[:,0][None,:],
-        order[:,1][None,:]
+        order[:, 0][:, None],
+        order[:, 1][:, None],
+        order[:, 0][None, :],
+        order[:, 1][None, :],
     ]
 
     return SymmetricTensor4(array=P_array)
 
 
-E_int, nu_int = (1,0)
-E_ext, nu_ext = (10,0)
+E_int, nu_int = (1, 0)
+E_ext, nu_ext = (10, 0)
 phi_int = 0.3
 
 lmbda_int = E_int * nu_int / (1 + nu_int) / (1 - 2 * nu_int)
@@ -225,20 +214,20 @@ mu_ext = E_ext / 2 / (1 + nu_ext)
 C_ext = C_sym_func(lmbda_ext, mu_ext)
 
 
-n = [1,0,0]
+n = [1, 0, 0]
 P = P_func(n)
 
 I = SymmetricTensor4.identity()
 
 
-A_int = ( P + (lambda_param * ((C_int-lambda_param*I).inv)) ).inv
-A_ext = ( P + (lambda_param * ((C_ext-lambda_param*I).inv)) ).inv
-A = A_int * phi_int + A_ext * (1-phi_int)
+A_int = (P + (lambda_param * ((C_int - lambda_param * I).inv))).inv
+A_ext = (P + (lambda_param * ((C_ext - lambda_param * I).inv))).inv
+A = A_int * phi_int + A_ext * (1 - phi_int)
 
-C_lam = (I + ((A.inv - P).inv))*lambda_param
+C_lam = (I + ((A.inv - P).inv)) * lambda_param
 
-E_Reuss = 1/((phi_int/E_int)+((1-phi_int)/E_ext))
-E_Voigt = (phi_int*E_int) + (1-phi_int)*E_ext
+E_Reuss = 1 / ((phi_int / E_int) + ((1 - phi_int) / E_ext))
+E_Voigt = (phi_int * E_int) + (1 - phi_int) * E_ext
 
 
 """
