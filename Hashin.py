@@ -8,12 +8,16 @@ from time import time
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
 
+import jaxmat.materials as jm
+
 import jax.numpy as jnp
 import equinox as eqx
 
 from eshelbyx.green_operator import (
     GreenOperator,
 )
+
+
 from eshelbyx.discretization import (
     MoulinecSuquetDiscretization,
     WillotDiscretization,
@@ -24,23 +28,23 @@ from eshelbyx.discretization import (
 from eshelbyx.grid import load_vtk_grid
 from jaxmat.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
 from eshelbyx.krylov_solver import KrylovAEMSolver
-from eshelbyx.solver import A2EMSolver, AEMSolver, MSSolver
+from eshelbyx.solver import A2EMSolver, AEMSolver, MSSolver, A2EM_iterativSolver
 
 current_folder = Path(__file__).parent.resolve()
 
 
 # Hybrid voxels treatment depending on the strategy
-strat_hybrid = "alpha"
+strat_hybrid = "None"
 
 # Solver
-solver_used = A2EMSolver
+solver_used = A2EM_iterativSolver
 
 # Discretization
 discretization_used = WillotDiscretization
 
 
 # Micro-structure created with microgen.py"
-file_name = "eshelbyx/results/Hashin_num_16.vti"
+file_name = "eshelbyx/results/Hashin_num_64.vti"
 grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
 
 
@@ -76,7 +80,8 @@ phi1 = (
 ) ** 3  # Volumic fraction of the central sphere in the set (central sphere + coating)
 phi2 = 1 - phi1  # Volumic fraction of the coating in the set (central sphere + coating)
 soft_center = True  # True : pore softer than the coating
-chi = 1000  # Material contrast between central sphere and coating
+chi = 100  # Material contrast between central sphere and coating
+
 
 
 # Material parameters
@@ -107,6 +112,7 @@ if (
     solver_used == AEMSolver
     or solver_used == A2EMSolver
     or solver_used == KrylovAEMSolver
+    or solver_used == A2EM_iterativSolver
 ):
     # Reference medium for the AEM and A2EM solvers
     E0 = 1.0
@@ -124,30 +130,29 @@ elif solver_used == MSSolver:
 
     E0 = (9 * K0 * mu0) / (3 * K0 + mu0)
     nu0 = (3 * K0 - 2 * mu0) / 2 / (3 * K0 + mu0)
+    
+    
 
 
 # Reference medium stiffness tensor written using the IsotropicTensor4 class
 lambda_0, mu0 = E0 * nu0 / (1 + nu0) / (1 - 2 * nu0), E0 / 2 / (1 + nu0)
-C0 = IsotropicTensor4(kappa=lambda_0 + (2 / 3) * mu0, mu=mu0)
+
+if strat_hybrid == "BD":
+    K_max = jnp.maximum(K1,K2)
+    K_min = jnp.minimum(K1,K2)
+    if soft_center == True:
+        scale_BD = K_max/(lambda_0 + (2 / 3) * mu0)*10
+    else : 
+        scale_BD = K_min/(lambda_0 + (2 / 3) * mu0)/10
+else:
+    scale_BD = 1.0
+
+C0 = IsotropicTensor4(kappa=lambda_0 + (2 / 3) * mu0, mu=mu0)*scale_BD
 
 
 # Reference medium stiffness tensor written using the SymmetricTensor4 class
-def C_sym_func(lmbda, mu):
-    C_sym_array = jnp.array(
-        [
-            [lmbda + 2 * mu, lmbda, lmbda, 0, 0, 0],
-            [lmbda, lmbda + 2 * mu, lmbda, 0, 0, 0],
-            [lmbda, lmbda, lmbda + 2 * mu, 0, 0, 0],
-            [0, 0, 0, 2 * mu, 0, 0],
-            [0, 0, 0, 0, 2 * mu, 0],
-            [0, 0, 0, 0, 0, 2 * mu],
-        ]
-    )
-    C_sym = SymmetricTensor4(array=C_sym_array)
-    return C_sym
-
-
-C0_aniso = C_sym_func(lambda_0, mu0)
+mat_0 = jm.LinearElasticIsotropic(E=E0, nu=nu0)
+C0_aniso = mat_0.C.to_symmetric().array
 
 
 # Material parameters mapping
@@ -223,6 +228,7 @@ eigenvalues = jnp.array([3 * Keff, 3 * K1, 3 * K2, 2 * mueff, 2 * mu1, 2 * mu2])
 lambda_param = jnp.max(eigenvalues) * secu
 
 
+
 # Eshelby 4th-order tensor computed with the local cartesian normal n and used for the laminate hybrid voxels strategy
 def P_func(n):
     n = jnp.asarray(n)
@@ -234,20 +240,11 @@ def P_func(n):
     term3 = jnp.einsum("j,il,m->ijlm", n, delta, n)
     term4 = jnp.einsum("j,im,l->ijlm", n, delta, n)
 
-    P4 = 0.5 * (term1 + term2 + term3 + term4) - jnp.einsum("i,j,l,m->ijlm", n, n, n, n)
-
-    # Order (6x6)
-    order = jnp.array([[0, 0], [1, 1], [2, 2], [0, 1], [0, 2], [1, 2]])
-
-    # Construction matrice 6x6
-    P_array = P4[
-        order[:, 0][:, None],
-        order[:, 1][:, None],
-        order[:, 0][None, :],
-        order[:, 1][None, :],
-    ]
-
-    return SymmetricTensor4(array=P_array)
+    P4 = SymmetricTensor4(
+        tensor=0.5 * (term1 + term2 + term3 + term4)
+        - jnp.einsum("i,j,l,m->ijlm", n, n, n, n)
+    )
+    return P4.array
 
 
 # Computation and application of the alpha 4th-order tensor depending on the hybridation strategy for hybrid voxels
@@ -274,7 +271,7 @@ def _apply_alpha(
 
         iC = (C + C0).inv
         alp = iC @ (C0 * 2.0)
-        sig = alp.eval_jvp(eps)  # here alp is a IsotropicTensor4
+        sig = alp @ eps  # here alp is a IsotropicTensor4
         return SymmetricTensor2(tensor=sig)
 
     def mean_alpha_branch(_):
@@ -300,7 +297,7 @@ def _apply_alpha(
             kappa=phi_int * alp_int.kappa + (1 - phi_int) * alp_ext.kappa,
             mu=phi_int * alp_int.mu + (1 - phi_int) * alp_ext.mu,
         )
-        sig = alp.eval_jvp(eps)  # here alp is a IsotropicTensor4
+        sig = alp @ eps  # here alp is a IsotropicTensor4
         return SymmetricTensor2(tensor=sig)
 
     def Voigt_branch(_):
@@ -326,7 +323,7 @@ def _apply_alpha(
 
         iC = (C + C0).inv
         alp = iC @ (C0 * 2.0)
-        sig = alp.eval_jvp(eps)  # here alp is a IsotropicTensor4
+        sig = alp @ eps  # here alp is a IsotropicTensor4
         return SymmetricTensor2(tensor=sig)
 
     def Reuss_branch(_):
@@ -356,7 +353,7 @@ def _apply_alpha(
 
         iC = (C + C0).inv
         alp = iC @ (C0 * 2.0)
-        sig = alp.eval_jvp(eps)  # here alp is a IsotropicTensor4
+        sig = alp @ eps  # here alp is a IsotropicTensor4
         return SymmetricTensor2(tensor=sig)
 
     def laminate_branch(_):
@@ -365,31 +362,65 @@ def _apply_alpha(
         E_int, nu_int = material_params_int
         E_ext, nu_ext = material_params_ext
         phi_int = volumic_fraction_list
+        
+        
+        mat_int = jm.LinearElasticIsotropic(E=E_int, nu=nu_int)
+        C_int = mat_int.C.to_symmetric().array
+        
+        mat_ext = jm.LinearElasticIsotropic(E=E_ext, nu=nu_ext)
+        C_ext = mat_ext.C.to_symmetric().array
+        
+
+        
+        n = local_normal
+        P = P_func(n)
+        Id = SymmetricTensor4.identity().array
+
+        A_int = jnp.linalg.inv(P + (lambda_param * (jnp.linalg.inv(C_int - lambda_param * Id))))
+        A_ext = jnp.linalg.inv(P + (lambda_param * (jnp.linalg.inv(C_ext - lambda_param * Id))))
+        A = A_int * phi_int + A_ext * (1 - phi_int)
+        
+
+        C_lam = (Id + (jnp.linalg.inv(jnp.linalg.inv(A) - P))) * lambda_param
+        
+        
+        iC_lam = jnp.linalg.inv(C_lam + C0_aniso)
+        alp_array = iC_lam @ (C0_aniso * 2.0)
+        
+        alp = SymmetricTensor4(array = alp_array)
+  
+        
+        sig = alp @ eps  # here alp is a IsotropicTensor4
+        return SymmetricTensor2(tensor=sig)
+    
+    def BD_branch(_):
+        # Brisard-Dormieux polarization rule
+        
+        E_int, nu_int = material_params_int
+        E_ext, nu_ext = material_params_ext
+        phi_int = volumic_fraction_list
 
         lmbda_int = E_int * nu_int / (1 + nu_int) / (1 - 2 * nu_int)
         mu_int = E_int / 2 / (1 + nu_int)
-        C_int = C_sym_func(lmbda_int, mu_int)
 
         lmbda_ext = E_ext * nu_ext / (1 + nu_ext) / (1 - 2 * nu_ext)
         mu_ext = E_ext / 2 / (1 + nu_ext)
-        C_ext = C_sym_func(lmbda_ext, mu_ext)
 
-        n = local_normal
-        P = P_func(n)
-
-        I = SymmetricTensor4.identity()
-
-        A_int = (P + (lambda_param * ((C_int - lambda_param * I).inv))).inv
-        A_ext = (P + (lambda_param * ((C_ext - lambda_param * I).inv))).inv
+        C_int = IsotropicTensor4(kappa=lmbda_int + 2 / 3 * mu_int, mu=mu_int)
+        C_ext = IsotropicTensor4(kappa=lmbda_ext + 2 / 3 * mu_ext, mu=mu_ext)
+        
+        A_int = (C_int-C0).inv
+        A_ext = (C_ext-C0).inv
+        
         A = A_int * phi_int + A_ext * (1 - phi_int)
-
-        C_lam = (I + ((A.inv - P).inv)) * lambda_param
-        iC_lam = (C_lam + C0_aniso).inv
-        alp = iC_lam @ (C0_aniso * 2.0)
-
-        sig = jnp.einsum("ijkl,kl->ij", alp, eps)
-
+        
+        C_BD = A.inv + C0
+        
+        iC = (C_BD + C0).inv
+        alp = iC @ (C0 * 2.0)
+        sig = alp @ eps  # here alp is a IsotropicTensor4
         return SymmetricTensor2(tensor=sig)
+
 
     branch_map = {
         "alpha": mean_alpha_branch,
@@ -397,6 +428,7 @@ def _apply_alpha(
         "Reuss": Reuss_branch,
         "None": normal_branch,
         "laminate": laminate_branch,
+        "BD" : BD_branch,
     }
 
     selected_branch = branch_map[strat_hybrid]
@@ -408,7 +440,7 @@ def _apply_alpha(
 def apply_alpha(
     eps, params, bool_hybrid, params_int, params_ext, phi, C0, local_normal, C0_aniso
 ):
-    eps_flatten = jnp.asarray(eps).reshape(-1, 3, 3)
+    eps_flatten = SymmetricTensor2(tensor=jnp.asarray(eps).reshape(-1, 3, 3))
     sig_tensor = jax.vmap(_apply_alpha, in_axes=(0, 0, 0, 0, 0, 0, None, 0, None))(
         eps_flatten,
         params,
@@ -444,70 +476,130 @@ alpha = lambda eps, scale=1.0: apply_alpha(
 C_eps = lambda eps: constitutive_law(eps, material_params)
 
 
+
+n_incr = 10
+
 # Macroscopic strain E applied
-E_macro = SymmetricTensor2(array=jnp.asarray([1.0, 1.0, 1.0, 0.0, 0.0, 0.0]))
-E_macro = grid.broadcast_to_grid(E_macro)  # create a field on the grid
+E_macro_final = SymmetricTensor2(array=jnp.asarray([1.0, 1.0, 1.0, 0.0, 0.0, 0.0]))
+E_macro_final = grid.broadcast_to_grid(E_macro_final)  # create a field on the grid
+
+Delta_E_macro = E_macro_final/n_incr
 
 
 # Green operator
 Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=discretization_used(grid))
 
 
-# Numerical computation depending on the solver being used
-if solver_used == MSSolver:
-    # Moulinec and Suquet's solver
-    for solver in [MSSolver]:
-        tic = time()
-        eps, sig, info = solver(E_macro, C_eps, C_eps_0, Gamma_0, tol=1e-6, max_iter=5)
-        print("Solver info:", info)  # ["num_steps"])
-        print(f"{solver.__name__} solver time", time() - tic)
-        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-        print("\n")
 
-elif solver_used == AEMSolver:
-    # AEM solver
-    for solver in [AEMSolver]:
-        tic = time()
-        eps_aux, eps, sig, info = solver(
-            E_macro, alpha, Gamma_0, tol=1.0e-6, max_iter=500
-        )
-        print("Solver info:", info)  # ["num_steps"])
-        print(f"{solver.__name__} solver time", time() - tic)
-        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-        print("\n")
-        eps_aux_jnp = jnp.array(eps_aux)
-        pv_grid.cell_data["strain_aux"] = eps_aux_jnp.reshape((-1, 3, 3))
-        scale_f = 1.0
 
-elif solver_used == A2EMSolver:
-    # A2EM solver
-    for solver in [A2EMSolver]:
-        tic = time()
-        eps_aux, eps, sig, info, scale_f = solver(
-            E_macro,
-            alpha,
-            Gamma_0,
-            tol=1e-6,
-            max_iter=1500,
-            auto_scale=True,
-            verbose=True,
-        )
 
-        print("Solver info:", info)  # ["num_steps"])
-        print(f"{solver.__name__} solver time", time() - tic)
-        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-        print("\n")
-        pv_grid.cell_data["strain_aux"] = eps_aux.reshape((-1, 3, 3))
+# ------------------------------------------------------------------
+# Initialisation
+# ------------------------------------------------------------------
+incr = 0
+E_macro = jnp.zeros_like(E_macro_final)
+eps = jnp.zeros_like(E_macro_final)
+sig = jnp.zeros_like(E_macro_final)
 
-elif solver_used == KrylovAEMSolver:
-    # Krylov-AEM solver
-    for solver in [KrylovAEMSolver]:
-        tic = time()
-        eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1e-6, max_iter=300)
-        print("Solver info:", info)  # ["num_steps"])
-        print(f"{solver.__name__} solver time", time() - tic)
-        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-        print("\n")
+
+scale_old = 1.0
+eps_aux_old = jnp.zeros_like(E_macro_final)
+
+#eps0 = Gamma_0.apply_C0_inv(sig)
+#eps_aux_old = 0.5 * (eps0 / scale_old + eps) 
+
+
+while incr< n_incr:
+
+    
+    # Incremental loading
+    E_macro = E_macro + Delta_E_macro
+    X_old = E_macro - eps - (1/scale_old)*Gamma_0.mv(sig - scale_old * Gamma_0.apply_C0(eps))
+    W_old = -Gamma_0.mv(sig)
+    
+    # Numerical computation depending on the solver being used
+    if solver_used == MSSolver:
+        # Moulinec and Suquet's solver
+        for solver in [MSSolver]:
+            tic = time()
+            eps, sig, info = solver(E_macro, C_eps, C_eps_0, Gamma_0, tol=1e-6, max_iter=5)
+            print("Solver info:", info)  # ["num_steps"])
+            print(f"{solver.__name__} solver time", time() - tic)
+            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+            print("\n")
+    
+    elif solver_used == AEMSolver:
+        # AEM solver
+        for solver in [AEMSolver]:
+            tic = time()
+            eps_aux, eps, sig, info = solver(
+                E_macro, alpha, Gamma_0, tol=1.0e-6, max_iter=500
+            )
+            print("Solver info:", info)  # ["num_steps"])
+            print(f"{solver.__name__} solver time", time() - tic)
+            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+            print("\n")
+        
+    
+    elif solver_used == A2EMSolver:
+        # A2EM solver
+        for solver in [A2EMSolver]:
+            tic = time()
+            eps, sig, info = solver(
+                E_macro,
+                alpha,
+                Gamma_0,
+                tol=1e-6,
+                max_iter=500,
+                auto_scale=True,
+                verbose=True,
+            )
+    
+            print("Solver info:", info)  # ["num_steps"])
+            print(f"{solver.__name__} solver time", time() - tic)
+            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+            print("\n")
+    
+    elif solver_used == KrylovAEMSolver:
+        # Krylov-AEM solver
+        for solver in [KrylovAEMSolver]:
+            tic = time()
+            eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1e-6, max_iter=300)
+            print("Solver info:", info)  # ["num_steps"])
+            print(f"{solver.__name__} solver time", time() - tic)
+            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+            print("\n")
+            
+            
+    elif solver_used == A2EM_iterativSolver:
+        # A2EM solver
+        for solver in [A2EM_iterativSolver]:
+            tic = time()
+            eps, sig, info, scale_old, eps_aux_old = solver(
+                eps_aux_old,
+                X_old,
+                scale_old,
+                W_old,
+                E_macro,
+                alpha,
+                Gamma_0,
+                tol=1e-6,
+                max_iter=500,
+                auto_scale=True,
+                verbose=True,
+                )
+    
+            print("Solver info:", info)  # ["num_steps"])
+            print(f"{solver.__name__} solver time", time() - tic)
+            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+            print("\n")
+            
+    incr+=1
+
+
+
+
+
 
 
 # store results
@@ -519,9 +611,6 @@ pv_grid.cell_data["stress"] = sig.reshape((-1, 3, 3))
 sigma_zz = sig[..., 2, 2].ravel()
 pv_grid.cell_data["stress_zz"] = sigma_zz
 
-# Extraction of the zz component of the auxiliar strain
-eps_aux_zz = eps_aux[..., 2, 2].ravel()
-pv_grid.cell_data["eps_aux_zz"] = eps_aux_zz
 
 # Extraction of the zz component of the strain
 eps_zz = eps[..., 2, 2].ravel()
@@ -530,6 +619,7 @@ pv_grid.cell_data["eps_zz"] = eps_zz
 # Extraction of the elastic energy
 W_elast = 0.5 * jnp.einsum("...ij,...ij->...", sig, eps)
 pv_grid.cell_data["W_elast"] = W_elast.ravel()
+
 
 
 pv_grid.save(file_name.removesuffix(".vti") + "_results.vtk")
