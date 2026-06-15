@@ -127,7 +127,7 @@ def A2EMSolver(
         "scale_final": scale_f,
     }
 
-    return eps, sigma, convergence_history
+    return eps, sigma, convergence_history, scale_f, eps_aux_f, itf, Delta_f
 
 
 def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
@@ -375,10 +375,10 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=
         #d_new = OperatorFFT(xi)
         
         xi_new = B - ((A-A0)*d_new)
-        #err = norm2(xi_new-xi)/norm2(xi_new)
+        err = norm2(xi_new-xi)/norm2(xi_new)
         #err = norm2(d_new - (xi_new + OperatorFFT_err(d_new))/A0)/norm2(B)
         #err = norm2(d_new - ((B + OperatorFFT_err(d_new))/A))/norm2(B/A)
-        err = norm2(d_new-d)#/norm2(B/A)
+        #err = norm2(d_new-d)
         
         
         
@@ -397,11 +397,11 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=
     # Run
     # ------------------------------------------------------------------
     init_state = (0, damage_init, xi, jnp.inf, convergence_history)
-    i_final, d_final, _, _, convergence_history = jax.lax.while_loop(
+    i_final, d_final, _, err_final, convergence_history = jax.lax.while_loop(
         cond_fun, body_fun, init_state
     )
     
-    return d_final, i_final
+    return d_final, i_final, err_final
   
 
 
@@ -456,8 +456,8 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=1e-6
         X_new = X - lmbda*Z
         d_aux_new = d_aux + lmbda*X
     
-        #d = projector_damage(alpha*d_aux)
-        #d_new = projector_damage(alpha*d_aux_new)
+        d = projector_damage(alpha*d_aux)
+        d_new = projector_damage(alpha*d_aux_new)
         d = alpha*d_aux
         d_new = alpha*d_aux_new
         
