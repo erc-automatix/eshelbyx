@@ -1,6 +1,7 @@
 import pytest
 import jax
 
+
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
 
@@ -219,3 +220,5 @@ def test_laminate(contrast, solver, grid_size, discretization):
     assert jnp.allclose(sig_num_xy, sig_an_xy)
     assert jnp.allclose(sig_num_xz, sig_an_xz)
     assert jnp.allclose(sig_num_yz, sig_an_yz)
+    
+    
