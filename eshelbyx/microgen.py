@@ -400,7 +400,7 @@ def main_Hashin_num():
     Voxelized geometry of the Hashin's coated sphere problem for future numerical computation
     """
 
-    N = 64  # Number of voxels in each direction
+    N = 25  # Number of voxels in each direction
     Rint = 0.2
     Rext = 0.4
     coating_thickness = Rext - Rint
@@ -1286,6 +1286,8 @@ def expansion_num_2phases_2D():
 
     plotter2.show()
 
+
+
     # Volumic fraction plot
 
     plotter3 = pv.Plotter()
@@ -1298,11 +1300,10 @@ def expansion_num_2phases_2D():
         show_edges=False,
     )
 
-    plotter3.add_lines(
-        circle,
-        color="black",
-        width=3,
-    )
+    plotter3.add_mesh(
+    circle,
+    color="black",
+    line_width=5,)
 
     plotter3.add_title("Volumic fraction")
 
@@ -1329,5 +1330,5 @@ def expansion_num_2phases_2D():
 #damage_num_2phases()
 #expansion_num_2phases()
 #elasticity_static_damage()
-elasticity_evolving_damage()
+#elasticity_evolving_damage()
 #expansion_num_2phases_2D()
