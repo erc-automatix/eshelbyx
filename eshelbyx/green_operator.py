@@ -90,9 +90,14 @@ class GreenOperator(lx.AbstractLinearOperator):
         return self.in_structure()
     
     
+@lx.is_symmetric.register(GreenOperator)
+def _(operator):
+    return False
+
+    
   
-"""
-class DamageGreenOperator(lx.AbstractLinearOperator):
+
+class DamageNaiveGreenOperator(lx.AbstractLinearOperator):
     grid: eqx.Module
     discretization: DiscretizationScheme
     
@@ -107,17 +112,11 @@ class DamageGreenOperator(lx.AbstractLinearOperator):
             X_hat = jnp.fft.fftn(X)
             
         with jax.named_scope("Gamma0/laplacian"):
-            Y_hat = self.discretization.apply_laplacian(1.0)
+            Y_hat = self.discretization.apply_laplacian(X_hat)
             
-        with jax.named_scope("Gamma0/assemble"):
-            lc = 0.15151515151515152
-            L = 1.0
-            Z_0 = (4*lc/L)*(1-jnp.exp(-L/(2*lc)))
-            singular_mask = self.discretization.singular_mask
-            Z_hat = jnp.where(singular_mask, Z_0, X_hat / (lc**2) / Y_hat)
             
         with jax.named_scope("Gamma0/ifft"):
-            out = jnp.fft.ifftn(Z_hat).real
+            out = jnp.fft.ifftn(Y_hat).real
             return out
         
         
@@ -141,8 +140,8 @@ class DamageGreenOperator(lx.AbstractLinearOperator):
     def out_structure(self):
         return self.in_structure()
 
-"""
-class DamageGreenOperator(lx.AbstractLinearOperator):
+
+class DamageFeugueurGreenOperator(lx.AbstractLinearOperator):
     grid: eqx.Module
     discretization: DiscretizationScheme
     A0 : float
@@ -169,20 +168,8 @@ class DamageGreenOperator(lx.AbstractLinearOperator):
         with jax.named_scope("Gamma0/ifft"):
             out = jnp.fft.ifftn(Z_hat).real
             return out
-    """
-    @partial(jax.remat, prevent_cse=False)
-    def _Gamma_0_func_impl(self, X):
-        
-        with jax.named_scope("Gamma0/fft"):
-            X_hat = jnp.fft.fftn(X)
-            
-        with jax.named_scope("Gamma0/laplacian"):
-            Y_hat = self.discretization.apply_laplacian(X_hat)
-            
-        with jax.named_scope("Gamma0/ifft"):
-            out = jnp.fft.ifftn(Y_hat).real
-            return out
-     """  
+    
+     
         
     def Gamma_0_func(self, Y):
         return self._Gamma_0_func_impl(Y)
@@ -205,10 +192,11 @@ class DamageGreenOperator(lx.AbstractLinearOperator):
         return self.in_structure()
 
 
-@lx.is_symmetric.register(GreenOperator)
+
+@lx.is_symmetric.register(DamageFeugueurGreenOperator)
 def _(operator):
     return False
 
-@lx.is_symmetric.register(DamageGreenOperator)
+@lx.is_symmetric.register(DamageNaiveGreenOperator)
 def _(operator):
     return False
