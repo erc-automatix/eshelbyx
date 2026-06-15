@@ -864,3 +864,139 @@ def A2EM_iterativSolver(
     }
 
     return eps, sigma, convergence_history, scale_f, eps_aux_f, itf, Delta_f
+
+
+
+
+
+# @eqx.debug.assert_max_traces(max_traces=1)
+@eqx.filter_jit
+def A2EM_iterativ_expansionSolver(
+    eps_aux_init,
+    X_init,
+    scale_init,
+    W_init,
+    eps_load,
+    alpha,
+    Gamma_0,
+    max_iter=1000,
+    tol=1e-10,
+    auto_scale=True,
+    step_adaptation=True,
+    verbose=True,
+):
+
+    # ------------------------
+    # Helpers
+    # ------------------------
+    def C0_inner_product(X, Y):
+        return jnp.einsum("...ij,...ij->", X, Gamma_0.apply_C0(Y))
+
+    def ref_norm(X):
+        return jnp.sqrt(C0_inner_product(X, X))
+
+    def projection_on_D(X):
+        z = Gamma_0.apply_C0(X)
+        return Gamma_0.mv(z)
+    
+    def mean_field(X):
+        spatial_axes = tuple(range(X.ndim - 2))
+        X_mean = jnp.mean(X, axis=spatial_axes)
+        X_mean_field = jnp.broadcast_to(X_mean, X.shape)
+        return X_mean_field
+
+    fact_safe = 1e-6     # used for homogenous solutions (eps = E_macro => k_A2EM explodes)
+      
+    # ------------------------
+    # One AEM iteration
+    # ------------------------
+    def step(carry):
+        it, X, eps_aux, W, scale, Delta = carry
+        aX = alpha(X, scale)
+        Y = projection_on_D(aX)
+
+        Z = aX - 2.0 * Y + 2 * W / scale + 2*mean_field(X-aX)
+
+        if step_adaptation:
+            lam_new = C0_inner_product(X, Z) / C0_inner_product(Z, Z)
+        else:
+            lam_new = 1.0
+
+        eps_aux_new = eps_aux + lam_new * X
+        eps_new = alpha(eps_aux_new, scale) + eps_load
+
+        sig_new = scale * Gamma_0.apply_C0(2.0 * eps_aux_new - (eps_new-eps_load))
+
+        W_new = (1 - 2 * lam_new) * W + lam_new * scale * Y
+
+        eps0 = Gamma_0.apply_C0_inv(sig_new)
+
+        k_A2EM = ref_norm(eps0) / (ref_norm(2*mean_field(eps_new-eps_load-eps_aux) + mean_field(eps_load) - eps_new)+fact_safe)
+
+        new_scale = jax.lax.select(auto_scale, k_A2EM, 1.0)
+
+        eps_aux_new = 0.5 * (eps0 / new_scale + eps_new - eps_load)
+
+        X_new = X - lam_new * Z + (1 / new_scale - 1 / scale) * W_new + (1 / scale - 1 / new_scale) * Gamma_0.apply_C0_inv(mean_field(sig_new))
+
+        Delta_new = ref_norm(X_new) / (ref_norm(2*mean_field(eps_new-eps_load-eps_aux) + mean_field(eps_load) - eps_new)+fact_safe)
+
+        if verbose:
+            jax.debug.print(
+                "Iteration {} ||X|| = {:.5e} Delta = {:.5e} ||sig|| = {:.5e} k_A2EM = {:.5e} lambda = {:.5e} scale = {:.5e}",
+                it,
+                ref_norm(X) / ref_norm(2*mean_field(eps_new-eps_load-eps_aux) + mean_field(eps_load)),
+                Delta_new,
+                jnp.mean(jnp.linalg.matrix_norm(sig_new)),
+                k_A2EM,
+                lam_new,
+                new_scale,
+            )
+        return (
+            it + 1,
+            X_new,
+            eps_aux_new,
+            W_new,
+            new_scale,
+            Delta_new,
+        )
+
+    # ------------------------
+    # While condition
+    # ------------------------
+    def cond(carry):
+        it, _, _, _, _, Delta = carry
+        return jnp.logical_and(it < max_iter, Delta > tol)
+
+    # ------------------------
+    # Initial state
+    # ------------------------
+    init_carry = (
+        0,
+        X_init,
+        eps_aux_init,
+        W_init,
+        scale_init,
+        jnp.inf,
+    )
+
+    # ------------------------
+    # Run while-loop (true early stop)
+    # ------------------------
+    itf, Xf, eps_aux_f, W_f, scale_f, Delta_f = jax.lax.while_loop(
+        cond, step, init_carry
+    )
+
+    # ------------------------
+    # Final fields
+    # ------------------------
+    eps = alpha(eps_aux_f, scale_f) + eps_load
+    sigma = scale_f * Gamma_0.apply_C0(2.0 * eps_aux_f - (eps-eps_load))
+
+    convergence_history = {
+        "num_steps": itf,
+        "Delta_final": Delta_f,
+        "scale_final": scale_f,
+    }
+
+    return eps, sigma, scale_f, eps_aux_f, convergence_history
