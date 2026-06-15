@@ -31,7 +31,7 @@ from eshelbyx.solver import A2EMSolver, AEMSolver, MSSolver
 current_folder = Path(__file__).parent.resolve()
 
 
-file_name_None = "eshelbyx/results/Hashin_num_65_results_None.vtk"
+file_name_None = "eshelbyx/results/hybrid_voxels/64*64*64/chi_1000_soft/Hashin_num_64_results_1000_soft_None.vtk"
 # file_name_64 = "eshelbyx/results/Hashin_num_64_results_alpha.vtk"
 # file_name_32 = "eshelbyx/results/Hashin_num_32_results_alpha.vtk"
 # file_name_16 = "eshelbyx/results/Hashin_num_16_results_alpha.vtk"
@@ -66,8 +66,8 @@ y_c = centers[:, 1]
 z_c = centers[:, 2]
 
 tol = 1e-6
-# shift = 1/64/2
-shift = 0
+shift = 1/64/2
+#shift = 0
 
 mask_center = (jnp.abs(y_c - shift) < tol) & (jnp.abs(x_c - shift) < tol)
 les_z = z_c[mask_center]
@@ -76,13 +76,16 @@ les_z = z_c[mask_center]
 # ---------------------------------------------------
 # Numerical solution (sigma zz over x coordinate)
 # ---------------------------------------------------
+chi = "1e6"
+caract = "soft"
+
 file_map = {
-    "None": "eshelbyx/results/Hashin_num_65_results_None.vtk",
-    "Voigt": "eshelbyx/results/Hashin_num_65_results_Voigt.vtk",
-    "Reuss": "eshelbyx/results/Hashin_num_65_results_Reuss.vtk",
-    "alpha": "eshelbyx/results/Hashin_num_65_results_Reuss.vtk",
-    "analytical": "eshelbyx/results/Hashin_an_65.vti",
-    "laminate": "eshelbyx/results/Hashin_num_65_results_laminate.vtk",
+    "None": f"eshelbyx/results/hybrid_voxels/64*64*64/chi_{chi}_{caract}/Hashin_num_64_results_{chi}_{caract}_None.vtk",
+    "Voigt": f"eshelbyx/results/hybrid_voxels/64*64*64/chi_{chi}_{caract}/Hashin_num_64_results_{chi}_{caract}_Voigt.vtk",
+    "Reuss": f"eshelbyx/results/hybrid_voxels/64*64*64/chi_{chi}_{caract}/Hashin_num_64_results_{chi}_{caract}_Reuss.vtk",
+    "alpha": f"eshelbyx/results/hybrid_voxels/64*64*64/chi_{chi}_{caract}/Hashin_num_64_results_{chi}_{caract}_alpha.vtk",
+    "laminate": f"eshelbyx/results/hybrid_voxels/64*64*64/chi_{chi}_{caract}/Hashin_num_64_results_{chi}_{caract}_laminate.vtk",
+    "analytical": f"eshelbyx/results/hybrid_voxels/64*64*64/chi_{chi}_{caract}/Hashin_an_64_{chi}_{caract}.vti",
 }
 
 
@@ -119,14 +122,14 @@ scale_f_Voigt = 6.24404
 scale_f_Reuss = 6.03526
 scale_f_laminate = 6.27183
 
-"""
+
 # chi = 1e12, soft
 scale_f_alpha = 5.03266
 scale_f_None = 4.66207
 scale_f_Voigt = 4.69569
 scale_f_Reuss = 4.36596
 scale_f_laminate = 4.01811
-"""
+
 
 # chi = 1e12, hard
 scale_f_alpha = 5.22902
@@ -149,7 +152,7 @@ scale_f_None = 5.04561
 scale_f_Voigt = 4.83578
 scale_f_Reuss = 5.16626
 scale_f_laminate = 4.95827
-"""
+
 
 scales_map = {
     "None": scale_f_None,
@@ -158,7 +161,7 @@ scales_map = {
     "alpha": scale_f_alpha,
     "laminate": scale_f_laminate,
 }
-
+"""
 
 # Material parameters of the reference medium
 E0 = 1.0
@@ -197,7 +200,7 @@ def refine_pyvista_grid(grid, Nloc):
 # ------------------------------------------------------------------------------------------
 file_types = ["laminate", "alpha", "None", "Voigt", "Reuss"]
 
-file_name_an = "eshelbyx/results/Hashin_an_65.vti"  # Analytical solution
+file_name_an = f"eshelbyx/results/hybrid_voxels/64*64*64/chi_{chi}_{caract}/Hashin_an_64_{chi}_{caract}.vti"  # Analytical solution
 grid_an, pv_grid_an = load_vtk_grid(file_name_an, marker_name="phase")
 
 # Data extraction : analytical stress components
@@ -223,7 +226,7 @@ err_grid = pv_grid_an.copy()
 # Compute and plot err on sigma zz
 plt.figure(figsize=(6, 4))
 for ftype in file_types:
-    file_name_num = f"eshelbyx/results/Hashin_num_65_results_{ftype}.vtk"
+    file_name_num = file_map[ftype]
     # file_name_num_64 = f"eshelbyx/results/Hashin_num_64_results_{ftype}.vtk"
     # file_name_num_32 = f"eshelbyx/results/Hashin_num_32_results_{ftype}.vtk"
     # file_name_num_16 = f"eshelbyx/results/Hashin_num_16_results_{ftype}.vtk"
@@ -308,7 +311,7 @@ plt.show()
 # Compute and plot err on eps zz
 plt.figure(figsize=(6, 4))
 for ftype in file_types:
-    file_name_num = f"eshelbyx/results/Hashin_num_65_results_{ftype}.vtk"
+    file_name_num = file_map[ftype]
 
     grid_num, pv_grid_num = load_vtk_grid(file_name_num, marker_name="phase")
 
@@ -339,58 +342,13 @@ plt.legend()
 plt.show()
 
 
-# Compute and plot err on eps aux zz
-plt.figure(figsize=(6, 4))
-for ftype in file_types:
-    K0_f = K0 * scales_map[ftype]
-    mu0_f = mu0 * scales_map[ftype]
-    E0_f = (9 * K0_f * mu0_f) / (3 * K0_f + mu0_f)
-    nu0_f = (3 * K0_f - 2 * mu0_f) / 2 / (3 * K0_f + mu0_f)
-    values_eps_aux_zz_an = 0.5 * (
-        ((1 + nu0_f) / E0_f) * values_sigma_zz_an
-        - (nu0_f / E0_f) * values_sigma_trace_an
-        + values_eps_zz_an
-    )
 
-    file_name_num = f"eshelbyx/results/Hashin_num_65_results_{ftype}.vtk"
-
-    grid_num, pv_grid_num = load_vtk_grid(file_name_num, marker_name="phase")
-
-    phase = pv_grid_num["phase"]
-    values_eps_aux_zz_num = pv_grid_num["eps_aux_zz"]
-
-    eps_aux_zz_max = jnp.max(values_eps_aux_zz_an)
-
-    err_eps_aux = (
-        jnp.abs((values_eps_aux_zz_num - values_eps_aux_zz_an) / (eps_aux_zz_max)) * 100
-    )
-
-    err_grid[f"err_{ftype}_eps_aux"] = err_eps_aux
-
-    # Plot error on eps aux zz along z
-    les_err_plot_eps_aux = err_eps_aux[mask_center]
-    plt.plot(
-        les_z,
-        les_err_plot_eps_aux,
-        label=rf"$err_{{L_2}}(\varepsilon_{{\alpha,zz}}^{{{ftype}}})$",
-    )
-
-plt.axvline(x=-0.4, color="grey", linestyle="--")
-plt.axvline(x=-0.2, color="grey", linestyle="--")
-plt.axvline(x=0.2, color="grey", linestyle="--")
-plt.axvline(x=0.4, color="grey", linestyle="--")
-plt.xlabel("z")
-plt.ylabel("err [%]")
-plt.xlim(0.15, 0.25)
-plt.grid(True)
-plt.legend()
-plt.show()
 
 
 # Compute and plot err on W_elast
 plt.figure(figsize=(6, 4))
 for ftype in file_types:
-    file_name_num = f"eshelbyx/results/Hashin_num_65_results_{ftype}.vtk"
+    file_name_num = file_map[ftype]
 
     grid_num, pv_grid_num = load_vtk_grid(file_name_num, marker_name="phase")
 
@@ -408,22 +366,26 @@ for ftype in file_types:
 
     # Plot error on W_elast along z
     les_err_plot_W_elast = err_W_elast[mask_center]
-    plt.plot(
-        les_z, les_err_plot_W_elast, label=rf"$err_{{L_2}}(W_{{elast}}^{{{ftype}}})$"
-    )
+    plt.plot(les_z, les_err_plot_W_elast, label=rf"$err_{{L_2}}(W_{{elast}}^{{{ftype}}})$")
 
 
 plt.axvline(x=-0.4, color="grey", linestyle="--")
 plt.axvline(x=-0.2, color="grey", linestyle="--")
 plt.axvline(x=0.2, color="grey", linestyle="--")
 plt.axvline(x=0.4, color="grey", linestyle="--")
-plt.xlabel("z")
+plt.xlabel("x")
 plt.ylabel("err [%]")
 plt.xlim(0.15, 0.25)
-plt.ylim(0, 70)
+#plt.ylim(0, 70)
 plt.grid(True)
 plt.legend()
 plt.show()
+
+
+
+
+
+
 
 
 # Saving the results on a single file
