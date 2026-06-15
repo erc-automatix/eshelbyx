@@ -31,7 +31,7 @@ from eshelbyx.discretization import (
 from eshelbyx.grid import load_vtk_grid
 from jaxmat.tensors import SymmetricTensor2, IsotropicTensor4, SymmetricTensor4
 from eshelbyx.krylov_solver import KrylovAEMSolver
-from eshelbyx.solver import AEM_expansionSolver, A2EM_expansionSolver
+from eshelbyx.solver import AEM_expansionSolver, A2EM_expansionSolver, A2EM_iterativ_expansionSolver
 
 current_folder = Path(__file__).parent.resolve()
 
@@ -40,16 +40,20 @@ current_folder = Path(__file__).parent.resolve()
 discretization_used = WillotDiscretization
 
 # Solver
-solver_used = A2EM_expansionSolver
+solver_used = A2EM_iterativ_expansionSolver
 
 # Hybrid voxels treatment depending on the strategy
-strat_hybrid = "Reuss"
+strat_hybrid = "None"
 
 
 # Micro-structure created with microgen.py
 file_name = "eshelbyx/results/2phases_expansion_num_2D_25.vti"
 grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
 
+
+
+# number of increments for the loading
+n_incr = 10
 
 
 # --------------------
@@ -95,16 +99,16 @@ def piecewise_field_couple(field, value_map, markers):
 
 bool_load = (grid.markers == 1) # |(grid.markers == 0)
 
-beta = 10
+beta = 0.1
 Id = SymmetricTensor2(array=jnp.asarray([1.0, 1.0, 0.0, 0.0, 0.0, 0.0]))
 
-eps_load = grid.broadcast_to_grid(Id * beta)
-eps_load = eps_load * bool_load[..., None] 
-eps_load = jnp.asarray(eps_load)
+eps_load_final = grid.broadcast_to_grid(Id * beta)
+eps_load_final = eps_load_final * bool_load[..., None] 
+eps_load_final = jnp.asarray(eps_load_final)
 
-pv_grid.cell_data["strain_load"] = eps_load.reshape((-1, 3, 3),order="F")
+pv_grid.cell_data["strain_load_final"] = eps_load_final.reshape((-1, 3, 3),order="F")
 
-
+Delta_eps_load = eps_load_final/n_incr
 
 
 # -----------------------------------------------------
@@ -313,13 +317,6 @@ def apply_alpha(
     return sig_tensor.tensor.reshape((eps.shape),order="F")
 
 
-material_params = (E.flatten(order="F"), nu.flatten(order="F"))
-bool_hybrid_list = bool_hybrid.flatten(order="F")
-material_params_int = (E_int.flatten(order="F"), nu_int.flatten(order="F"))
-material_params_ext = (E_ext.flatten(order="F"), nu_ext.flatten(order="F"))
-volumic_fraction_list = volumic_fraction.flatten(order="F")
-
-
 alpha = lambda eps, scale=1.0: apply_alpha(
     eps,
     material_params,
@@ -331,6 +328,13 @@ alpha = lambda eps, scale=1.0: apply_alpha(
 )
 
 
+material_params = (E.flatten(order="F"), nu.flatten(order="F"))
+bool_hybrid_list = bool_hybrid.flatten(order="F")
+material_params_int = (E_int.flatten(order="F"), nu_int.flatten(order="F"))
+material_params_ext = (E_ext.flatten(order="F"), nu_ext.flatten(order="F"))
+volumic_fraction_list = volumic_fraction.flatten(order="F")
+
+
 
 
 # Green operator
@@ -339,49 +343,115 @@ Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=discretization_used(gri
 
 
 
-# Numerical computation depending on the solver being used
+# ---------------------------------------------------
+# Definition of the increment loop
+# ---------------------------------------------------
 
-# AEM expansion solver
-if solver_used == AEM_expansionSolver:
-    for solver in [AEM_expansionSolver]:
-        tic = time()
-        eps, sig, info = solver(
-            eps_load, alpha, Gamma_0, tol=1e-6, max_iter=1000
-        )
-        print("Solver info:", info)  # ["num_steps"])
-        print(f"{solver.__name__} solver time", time() - tic)
-        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-        print("\n")
-       
-        
-elif solver_used == A2EM_expansionSolver:
-    # A2EM solver
-    for solver in [A2EM_expansionSolver]:
-        tic = time()
-        eps, sig, info = solver(
-            eps_load,
-            alpha,
-            Gamma_0,
-            tol=1e-6,
-            max_iter=1000,
-            auto_scale=True,
-            verbose=True,
-        )
+def mean_field(X):
+    spatial_axes = tuple(range(X.ndim - 2))
+    X_mean = jnp.mean(X, axis=spatial_axes)
+    X_mean_field = jnp.broadcast_to(X_mean, X.shape)
+    return X_mean_field
 
-        print("Solver info:", info)  # ["num_steps"])
-        print(f"{solver.__name__} solver time", time() - tic)
-        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-        print("\n")
+# Convergence condition
+def cond_fun_incr(state):
+    incr, eps, sig, eps_aux, scale, eps_load, X = state
+    return incr<n_incr
+
+
+
+# Body function of the increment loop
+def body_fun_incr(state):
+    incr, eps, sig, eps_aux, scale, eps_load, X = state
+    
+
+    # Incremental loading
+    eps_load = eps_load + Delta_eps_load
+    eps = eps + Delta_eps_load
+    
+    X = -(1/scale)*Gamma_0.apply_C0_inv(mean_field(sig)) + mean_field(eps) - eps - (1/scale)*Gamma_0.mv(sig) + Gamma_0.mv(Gamma_0.apply_C0(eps))
+    W = -Gamma_0.mv(sig)
+    
+
+    # Numerical computation depending on the solver being used
+    
+    # AEM expansion solver
+    if solver_used == AEM_expansionSolver:
+        for solver in [AEM_expansionSolver]:
+            tic = time()
+            eps, sig, info = solver(
+                eps_load, alpha, Gamma_0, tol=1e-6, max_iter=1000
+            )
+            print("Solver info:", info)  # ["num_steps"])
+            print(f"{solver.__name__} solver time", time() - tic)
+            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+            print("\n")
+           
+            
+    elif solver_used == A2EM_iterativ_expansionSolver:
+        # A2EM solver
+        for solver in [A2EM_iterativ_expansionSolver]:
+            tic = time()
+            eps, sig, scale, eps_aux, X, info = solver(
+                eps_aux,
+                X,
+                scale,
+                W,
+                eps_load,
+                alpha,
+                Gamma_0,
+                tol=1e-6,
+                max_iter=1000,
+                auto_scale=True,
+                verbose=True,
+            )
+    
+            print("Solver info:", info)  # ["num_steps"])
+            print(f"{solver.__name__} solver time", time() - tic)
+            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+            print("\n")
+            
+    # Print increment number
+    jax.debug.print("\nIncrement {}",incr+1,)
+            
+    return incr+1, eps, sig, eps_aux, scale, eps_load, X 
+    
+
+
+# ------------------------------------------------------------------
+# Initialisation
+# ------------------------------------------------------------------
+incr = 0
+eps_load = jnp.zeros_like(eps_load_final)
+eps = jnp.zeros_like(eps_load_final)
+sig = jnp.zeros_like(eps_load_final)
+scale = 1.0
+eps_aux = jnp.zeros_like(eps_load_final)
+X = jnp.zeros_like(eps_load_final)
+
+
+
+# ----------------------------------------------------------------
+# Run increment loop
+# ----------------------------------------------------------------
+
+init_state_incr = incr, eps, sig, eps_aux, scale, eps_load, X
+
+incr_f, eps_f, sig_f, eps_aux_f, scale_f, eps_load_f, X_f = jax.lax.while_loop(
+    cond_fun_incr, body_fun_incr, init_state_incr
+)
+
+
 
 
 # store results
-pv_grid.cell_data["strain"] = eps.reshape((-1, 3, 3),order="F")
-pv_grid.cell_data["stress"] = sig.reshape((-1, 3, 3),order="F")
+pv_grid.cell_data["strain"] = eps_f.reshape((-1, 3, 3),order="F")
+pv_grid.cell_data["stress"] = sig_f.reshape((-1, 3, 3),order="F")
 
 
 
 # Extraction of the xx component of the stress
-sigma_xx = sig[..., 0, 0].flatten(order="F")
+sigma_xx = sig_f[..., 0, 0].flatten(order="F")
 pv_grid.cell_data["stress_xx"] = sigma_xx
 
 
