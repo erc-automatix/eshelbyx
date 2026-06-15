@@ -30,7 +30,7 @@ def voxelize_all_corners(mesh: pv.PolyData, grid: pv.ImageData):
     pts = pv.PolyData(grid.points)
     mask = pts.select_enclosed_points(mesh)["SelectedPoints"].astype(bool)
 
-    inside = mask.reshape(nx, ny, nz)
+    inside = mask.reshape((nx, ny, nz),order="F")
 
     voxels = (
         inside[:-1, :-1, :-1]
@@ -56,7 +56,7 @@ def voxelize_at_least_one_corner(mesh: pv.PolyData, grid: pv.ImageData):
     pts = pv.PolyData(grid.points)
     mask = pts.select_enclosed_points(mesh)["SelectedPoints"].astype(bool)
 
-    inside = mask.reshape(nx, ny, nz)
+    inside = mask.reshape((nx, ny, nz),order="F")
 
     voxels = (
         inside[:-1, :-1, :-1]
@@ -487,7 +487,7 @@ def main_Hashin_num():
     phases_couple[hybrid_pore] = (1, 2)
     phases_couple[hybrid_coating] = (2, 0)
 
-    grid.cell_data["phases_couple"] = phases_couple.reshape(-1, 2)
+    grid.cell_data["phases_couple"] = phases_couple.reshape((-1, 2),order="F")
 
     # ------------------------------------------------------------------------------------------------------------------
     # Volumic fraction labeling of the internal material,
@@ -557,15 +557,15 @@ def main_Hashin_num():
     grid.cell_data["bool_hybrid_test"] = bool_hybrid_test.flatten()
 
     grid.cell_data["volumic_fraction"] = volumic_fraction.flatten()
-    grid.cell_data["local_cartesian_normal"] = local_cartesian_normal.reshape((-1, 3))
+    grid.cell_data["local_cartesian_normal"] = local_cartesian_normal.reshape((-1, 3),order="F")
 
-    local_x = local_cartesian_normal.reshape((-1, 3))[:, 0]
+    local_x = local_cartesian_normal.reshape((-1, 3),order="F")[:, 0]
     grid.cell_data["local_cartesian_normal_x"] = local_x
 
-    local_y = local_cartesian_normal.reshape((-1, 3))[:, 1]
+    local_y = local_cartesian_normal.reshape((-1, 3),order="F")[:, 1]
     grid.cell_data["local_cartesian_normal_y"] = local_y
 
-    local_z = local_cartesian_normal.reshape((-1, 3))[:, 2]
+    local_z = local_cartesian_normal.reshape((-1, 3),order="F")[:, 2]
     grid.cell_data["local_cartesian_normal_z"] = local_z
 
     print("Volume fractions:")
@@ -868,8 +868,8 @@ def expansion_num_2phases():
     Voxelized geometry for expansion : spherical inclusion within a cubic matrix
     """
 
-    N = 64
-    L = 100.0
+    N = 25
+    L = 2
     radius = L/4
 
     bounds = (-L/2, L/2, -L/2, L/2, -L/2, L/2)
@@ -923,7 +923,7 @@ def expansion_num_2phases():
     phases_couple = np.zeros((*inside_pore.shape, 2), dtype=int)
     phases_couple[hybrid_pore] = (1, 0)
 
-    grid.cell_data["phases_couple"] = phases_couple.reshape(-1, 2)
+    grid.cell_data["phases_couple"] = phases_couple.reshape((-1, 2),order="F")
 
     # ------------------------------------------------------------------------------------------------------------------
     # Volumic fraction labeling of the internal material,
@@ -1039,9 +1039,9 @@ def elasticity_static_damage():
     Voxelized geometry for the AT2 damage model with an exponential damage field in the center of a box
     """
     
-    N = 64  # Number of voxels per direction
-    bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)
-    grid = make_grid(bounds, (N + 1, N + 1, N + 1))
+    N = 65  # Number of voxels per direction
+    bounds = (-0.5, 0.5, -0.5, 0.5, -0.5/N, 0.5/N)
+    grid = make_grid(bounds, (N + 1, N + 1, 2))
     
     # Voxels centers coordinates
     L = (bounds[1] - bounds[0]) # Length of the domain
@@ -1049,13 +1049,13 @@ def elasticity_static_damage():
     l0 = 5*dx
     xc = bounds[0] + (np.arange(N) + 0.5) * dx
     yc = bounds[2] + (np.arange(N) + 0.5) * dx
-    zc = bounds[4] + (np.arange(N) + 0.5) * dx
+    zc = bounds[4] + (np.arange(1) + 0.5) * dx
     Xc, Yc, Zc = np.meshgrid(xc, yc, zc, indexing='ij') # Coordinates of the voxels centers
     
     
     # Analytical damage
-    damage = np.zeros((N, N, N), dtype=np.float64)
-    damage = jnp.exp(-jnp.abs(Xc/l0))  # exponential
+    damage = np.zeros((N, N, 1), dtype=np.float64)
+    damage = jnp.exp(-jnp.abs(Yc/l0))  # exponential
     grid.cell_data["damage"] = damage.flatten(order="F")
     
     # Phase labeling
@@ -1073,9 +1073,9 @@ def elasticity_evolving_damage():
     
     Lx = 1.0
     Ly = Lx
-    L_pre_damage = Lx/20
+    L_pre_damage = Lx/10
     
-    Ny = 45  # Number of voxels per direction
+    Ny = 65  # Number of voxels per direction
     Nx = int(Ny*Lx/Ly)
     
     print("Nx :", Nx)
@@ -1088,6 +1088,7 @@ def elasticity_evolving_damage():
     # Voxels centers coordinates    
     dx = Lx / Nx
     dy = Ly/Ny
+    
     
     tol_pre_damage = dy/2
     
@@ -1102,6 +1103,7 @@ def elasticity_evolving_damage():
     bool_pre_damage = ((np.abs(Xc) < L_pre_damage / 2)& (np.abs(Yc) < tol_pre_damage))
     damage_init[bool_pre_damage] = 1.0
     grid.cell_data["damage_init"] = damage_init.flatten(order="F")
+    
     
     # Phase labeling
     phase = np.zeros_like(damage_init, dtype=np.uint8)
@@ -1215,15 +1217,15 @@ def expansion_num_2phases_2D():
         origin=(-L / 2, -L / 2, -dx / 2),
     )
 
-    grid.cell_data["phase"] = phase.ravel(order="F")
+    grid.cell_data["phase"] = phase.flatten(order="F")
 
-    grid.cell_data["bool_hybrid"] = bool_hybrid.ravel(order="F")
+    grid.cell_data["bool_hybrid"] = bool_hybrid.flatten(order="F")
 
-    grid.cell_data["volumic_fraction"] = volumic_fraction.ravel(order="F")
+    grid.cell_data["volumic_fraction"] = volumic_fraction.flatten(order="F")
 
-    grid.cell_data["damage_init"] = damage_init.ravel(order="F")
+    grid.cell_data["damage_init"] = damage_init.flatten(order="F")
 
-    grid.cell_data["phases_couple"] = phases_couple.reshape(-1, 2)
+    grid.cell_data["phases_couple"] = phases_couple.reshape((-1, 2),order="F")
 
     # -------------------------------------------------
     # Visualization
@@ -1316,6 +1318,8 @@ def expansion_num_2phases_2D():
 
 
 
+
+
 #main_3_phases()
 #main_Hashin_an()
 #main_Hashin_num()
@@ -1325,5 +1329,5 @@ def expansion_num_2phases_2D():
 #damage_num_2phases()
 #expansion_num_2phases()
 #elasticity_static_damage()
-#elasticity_evolving_damage()
-expansion_num_2phases_2D()
+elasticity_evolving_damage()
+#expansion_num_2phases_2D()
