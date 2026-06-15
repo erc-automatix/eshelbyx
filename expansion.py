@@ -355,14 +355,14 @@ def mean_field(X):
 
 # Convergence condition
 def cond_fun_incr(state):
-    incr, eps, sig, eps_aux, scale, eps_load, X = state
+    incr, eps, sig, eps_aux, scale, eps_load = state
     return incr<n_incr
 
 
 
 # Body function of the increment loop
 def body_fun_incr(state):
-    incr, eps, sig, eps_aux, scale, eps_load, X = state
+    incr, eps, sig, eps_aux, scale, eps_load = state
     
 
     # Incremental loading
@@ -392,7 +392,7 @@ def body_fun_incr(state):
         # A2EM solver
         for solver in [A2EM_iterativ_expansionSolver]:
             tic = time()
-            eps, sig, scale, eps_aux, X, info = solver(
+            eps, sig, scale, eps_aux, info = solver(
                 eps_aux,
                 X,
                 scale,
@@ -414,7 +414,7 @@ def body_fun_incr(state):
     # Print increment number
     jax.debug.print("\nIncrement {}",incr+1,)
             
-    return incr+1, eps, sig, eps_aux, scale, eps_load, X 
+    return incr+1, eps, sig, eps_aux, scale, eps_load
     
 
 
@@ -427,7 +427,6 @@ eps = jnp.zeros_like(eps_load_final)
 sig = jnp.zeros_like(eps_load_final)
 scale = 1.0
 eps_aux = jnp.zeros_like(eps_load_final)
-X = jnp.zeros_like(eps_load_final)
 
 
 
@@ -435,9 +434,9 @@ X = jnp.zeros_like(eps_load_final)
 # Run increment loop
 # ----------------------------------------------------------------
 
-init_state_incr = incr, eps, sig, eps_aux, scale, eps_load, X
+init_state_incr = incr, eps, sig, eps_aux, scale, eps_load
 
-incr_f, eps_f, sig_f, eps_aux_f, scale_f, eps_load_f, X_f = jax.lax.while_loop(
+incr_f, eps_f, sig_f, eps_aux_f, scale_f, eps_load_f = jax.lax.while_loop(
     cond_fun_incr, body_fun_incr, init_state_incr
 )
 
@@ -447,7 +446,6 @@ incr_f, eps_f, sig_f, eps_aux_f, scale_f, eps_load_f, X_f = jax.lax.while_loop(
 # store results
 pv_grid.cell_data["strain"] = eps_f.reshape((-1, 3, 3),order="F")
 pv_grid.cell_data["stress"] = sig_f.reshape((-1, 3, 3),order="F")
-
 
 
 # Extraction of the xx component of the stress

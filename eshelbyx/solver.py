@@ -999,4 +999,4 @@ def A2EM_iterativ_expansionSolver(
         "scale_final": scale_f,
     }
 
-    return eps, sigma, scale_f, eps_aux_f, Xf, convergence_history
+    return eps, sigma, scale_f, eps_aux_f, convergence_history
