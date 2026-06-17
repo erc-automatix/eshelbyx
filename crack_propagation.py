@@ -482,7 +482,7 @@ def body_fun_incr(state):
     # ---------------------------------------------------------------------
     
     # Saving mean strain and stress fields to plot the degraded macroscopic strain-stress law
-    sigma_xx_mean = jnp.mean(sig_f_step[..., 1, 1].ravel())
+    sigma_xx_mean = jnp.mean(sig_f_step[..., 1, 1].flatten(order="F"))
     eps_xx_mean = E_macro_f_step[0][0][0][1][1]
     
     les_sig_mean = les_sig_mean.at[incr].set(sigma_xx_mean)
@@ -504,7 +504,7 @@ def body_fun_incr(state):
     
     
     
-    # Print increment numer
+    # Print increment number
     jax.debug.print("\nIncrement {}",incr+1,)
 
 

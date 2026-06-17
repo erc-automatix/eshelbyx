@@ -342,16 +342,17 @@ Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=discretization_used(gri
 
 
 
-
-# ---------------------------------------------------
-# Definition of the increment loop
-# ---------------------------------------------------
-
 def mean_field(X):
     spatial_axes = tuple(range(X.ndim - 2))
     X_mean = jnp.mean(X, axis=spatial_axes)
     X_mean_field = jnp.broadcast_to(X_mean, X.shape)
     return X_mean_field
+
+
+
+# ---------------------------------------------------
+# Definition of the increment loop
+# ---------------------------------------------------
 
 # Convergence condition
 def cond_fun_incr(state):
@@ -392,7 +393,7 @@ def body_fun_incr(state):
         # A2EM solver
         for solver in [A2EM_iterativ_expansionSolver]:
             tic = time()
-            eps, sig, scale, eps_aux, info = solver(
+            eps, sig, scale, eps_aux, info, itf, Deltaf = solver(
                 eps_aux,
                 X,
                 scale,

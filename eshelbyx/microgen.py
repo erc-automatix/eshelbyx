@@ -1121,9 +1121,9 @@ def expansion_num_2phases_2D():
         phase 1 = pore
     """
 
-    N = 25
+    N = 100
 
-    L = 2
+    L = 100
     radius = L / 4
 
     dx = L / N
@@ -1331,4 +1331,4 @@ def expansion_num_2phases_2D():
 #expansion_num_2phases()
 #elasticity_static_damage()
 #elasticity_evolving_damage()
-#expansion_num_2phases_2D()
+expansion_num_2phases_2D()
