@@ -32,7 +32,7 @@ current_folder = Path(__file__).parent.resolve()
 discretization_used = WillotDiscretization
 
 # Solver
-solver_used = damage_Feugueur_solver
+solver_used = damage_EAEM_solver
 
 
 # Micro-structure created with microgen.py
@@ -46,7 +46,7 @@ grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
 
 chi = 1e4 # contrast
 
-A_matrix = 1.0
+A_matrix = 1
 A_pore = A_matrix*chi
 
 B_matrix = 1.0
@@ -89,7 +89,7 @@ if solver_used == damage_Feugueur_solver:
     # Solver
     for solver in [damage_Feugueur_solver]:
         tic = time()
-        d = solver(damage_init, A, B, A0, Gamma_0, max_iter = 5000, tol=1e-3, verbose=True)
+        d, it_max_damage, delta_damage = solver(damage_init, A, B, A0, Gamma_0, damage_init, max_iter = 5000, tol=1e-6, verbose=True)
         print(f"{solver.__name__} solver time", time() - tic)
         print("\n")
 
@@ -101,7 +101,7 @@ elif solver_used == damage_EAEM_solver:
     # Solver
     for solver in [damage_EAEM_solver]:
         tic = time()
-        d = solver(damage_init, A, B, A0, Gamma_0, max_iter = 5000, tol=1e-3, verbose=True)
+        d, it_max_damage, delta_damage = solver(damage_init, A, B, A0, Gamma_0, damage_init, max_iter = 5000, tol=1e-6, verbose=True)
         print(f"{solver.__name__} solver time", time() - tic)
         print("\n")
         
@@ -110,7 +110,7 @@ elif solver_used == damage_EAEM_solver:
         
         
 
-pv_grid.cell_data["damage_new"] = d.ravel()
+pv_grid.cell_data["damage_new"] = d.flatten(order="F")
 pv_grid.save(file_name.removesuffix(".vti") + "_results.vtk")
 
 
