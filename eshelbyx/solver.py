@@ -322,7 +322,7 @@ def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=
 
 
 
-def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=1e-6, verbose=True):
+def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 1000, tol=1e-6, verbose=True):
     """
     Damage solver from Gerald Feugueur's thesis
     """
@@ -345,9 +345,9 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=
     def norm2(X):
         return jnp.sqrt(jnp.sum(X**2))
     
-    # Projector : d -> [0,1] (unused for now)
-    def projector_damage(d):
-        return jnp.clip(d, 0.0, 1.0)
+    # Projector : d -> [d_old,1] 
+    def projector_damage(d, d_old):
+        return jnp.clip(d, d_old, 1.0)
     
     
     # ------------------------------------------------------------------
@@ -371,14 +371,14 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=
     def body_fun(state):
         i, d, xi, err, convergence_history = state
         
-        d_new = projector_damage(OperatorFFT(xi))
+        d_new = projector_damage(OperatorFFT(xi),d_old)
         #d_new = OperatorFFT(xi)
         
         xi_new = B - ((A-A0)*d_new)
-        err = norm2(xi_new-xi)/norm2(xi_new)
-        #err = norm2(d_new - (xi_new + OperatorFFT_err(d_new))/A0)/norm2(B)
-        #err = norm2(d_new - ((B + OperatorFFT_err(d_new))/A))/norm2(B/A)
-        #err = norm2(d_new-d)
+        #err = norm2(xi_new-xi)/norm2(xi_new)
+        
+        # New error
+        err = norm2(d_new - OperatorFFT(xi_new))
         
         
         
@@ -405,7 +405,7 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=
   
 
 
-def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=1e-6, verbose=True):
+def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 1000, tol=1e-6, verbose=True):
     """
     Damage solver with EAEM methodology
     """
@@ -422,9 +422,9 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=1e-6
     def norm2(X):
         return jnp.sqrt(jnp.sum(X**2))
     
-    # Projector : d -> [0,1] (unused for now)
-    def projector_damage(d):
-        return jnp.clip(d, 0.0, 1.0)
+    # Projector : d -> [d_old,1] 
+    def projector_damage(d,d_old):
+        return jnp.clip(d, d_old, 1.0)
     
     
     alpha = 2*A0/(A+A0)     # Auxiliar parameter in [0,2]
@@ -456,15 +456,20 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=1e-6
         X_new = X - lmbda*Z
         d_aux_new = d_aux + lmbda*X
     
-        d = projector_damage(alpha*d_aux)
-        d_new = projector_damage(alpha*d_aux_new)
+        d = projector_damage(alpha*d_aux, d_old)
+        d_new = projector_damage(alpha*d_aux_new, d_old)
         d = alpha*d_aux
         d_new = alpha*d_aux_new
         
         d_aux_new = d_new/alpha
         
 
-        err = jnp.minimum(norm2(d_new-d), norm2(X_new))  # uniform case : X_new = 0
+        #err = jnp.minimum(norm2(d_new-d), norm2(X_new))  # uniform case : X_new = 0
+        #err = norm2(X_new)
+        
+        # New error
+        xi_new = B - ((A-A0)*d_new)
+        err = norm2(d_new - OperatorFFT(xi_new))
 
         convergence_history["err"] = convergence_history["err"].at[i].set(err)
         if verbose:
@@ -485,7 +490,7 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, max_iter = 1000, tol=1e-6
         cond_fun, body_fun, init_state
     )
     
-    d_final = projector_damage(alpha*d_aux_final)
+    d_final = projector_damage(alpha*d_aux_final, d_old)
     
     return d_final, i_final, err_final
 
