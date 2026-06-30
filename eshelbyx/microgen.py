@@ -868,8 +868,8 @@ def expansion_num_2phases():
     Voxelized geometry for expansion : spherical inclusion within a cubic matrix
     """
 
-    N = 25
-    L = 2
+    N = 16
+    L = 1
     radius = L/4
 
     bounds = (-L/2, L/2, -L/2, L/2, -L/2, L/2)
@@ -976,6 +976,13 @@ def expansion_num_2phases():
     # -------------
     # Visualization
     # -------------
+    
+    scalar_bar_args = {
+    "position_x": 0.25,
+    "position_y": 0.05,
+    "width": 0.5,
+    "height": 0.08,
+    "vertical": False,}
 
     # SLice at x = 0
     slice_mid = grid.slice(normal="x", origin=(0, 0, 0))
@@ -988,6 +995,7 @@ def expansion_num_2phases():
         show_edges=True,
         cmap=["lightblue", "purple"],
         clim=[0, 1],
+        scalar_bar_args=scalar_bar_args,
     )
     pore_slice = pore.slice(normal="x", origin=(0, 0, 0))
     plotter1.add_mesh(
@@ -1001,7 +1009,7 @@ def expansion_num_2phases():
     # Plot hybrid voxels
     plotter2 = pv.Plotter()
     plotter2.add_mesh(
-        slice_mid, scalars="bool_hybrid", show_edges=True, cmap=["lightblue", "red"]
+        slice_mid, scalars="bool_hybrid", show_edges=True, cmap=["lightblue", "red"], scalar_bar_args=scalar_bar_args,
     )
     plotter2.add_mesh(
         pore_slice, color="black", opacity=1.0, show_edges=True, line_width=3
@@ -1019,6 +1027,7 @@ def expansion_num_2phases():
         show_edges=False,
         cmap="viridis",
         clim=[0, 1],
+        scalar_bar_args=scalar_bar_args,
     )
     pore_slice = pore.slice(normal="x", origin=(0, 0, 0))
     plotter3.add_mesh(
@@ -1101,12 +1110,23 @@ def elasticity_evolving_damage():
     # Initial damage
     damage_init = np.zeros((Nx, Ny, 1), dtype=np.float64)
     bool_pre_damage = ((np.abs(Xc) < L_pre_damage / 2)& (np.abs(Yc) < tol_pre_damage))
+    grid.cell_data["bool_pre_damage"] = bool_pre_damage.flatten(order="F")
+    #bool_pre_damage = np.abs(Yc) < tol_pre_damage
     damage_init[bool_pre_damage] = 1.0
     grid.cell_data["damage_init"] = damage_init.flatten(order="F")
     
     
+    # Small perturbation
+    perturbation = np.ones((Nx, Ny, 1), dtype=np.float64)
+    #perturbation = 1-(1e-4*jnp.cos(Yc))
+    #perturbation = 1-(1e-2*jnp.exp(-jnp.abs(Yc)/(5*dy)))
+    perturbation[bool_pre_damage] = 1-(1e-4)
+    grid.cell_data["perturbation"] = perturbation.flatten(order="F")
+    
+    
     # Phase labeling
     phase = np.zeros_like(damage_init, dtype=np.uint8)
+    phase[bool_pre_damage]=1
     grid.cell_data["phase"] = phase.flatten()
     
     grid.save(f"results/elasticity_evolving_damage_{Ny}.vti") 
@@ -1121,9 +1141,9 @@ def expansion_num_2phases_2D():
         phase 1 = pore
     """
 
-    N = 100
+    N = 25
 
-    L = 100
+    L = 2
     radius = L / 4
 
     dx = L / N
@@ -1320,15 +1340,178 @@ def expansion_num_2phases_2D():
 
 
 
+def homogenization_shear_2D():
+    """
+    Microstructure geometry for the shear homogenization problem
+    """
+
+    N = 64
+
+    L = 1
+    radius = L/10
+    alpha = 1/8
+
+    dx = L / N
+
+    # -------------------------------------------------
+    # Cell centers
+    # -------------------------------------------------
+
+    x = np.linspace(
+        -L / 2 + dx / 2,
+        L / 2 - dx / 2,
+        N,
+    )
+
+    y = np.linspace(
+        -L / 2 + dx / 2,
+        L / 2 - dx / 2,
+        N,
+    )
+
+    X, Y = np.meshgrid(x, y, indexing="ij")
+    
+    # ------------------------------
+    # Inclusion localisation
+    # ------------------------------
+
+    xc_NE = alpha*L
+    yc_NE =  L/2 - (alpha*L)
+    
+    xc_NO = -L/2 + (alpha*L)
+    yc_NO =  alpha*L
+    
+    xc_SO = -alpha*L
+    yc_SO =  -L/2 + (alpha*L)
+    
+    xc_SE = L/2 - (alpha*L)
+    yc_SE =  -alpha*L
+    
+
+    r_NE = np.sqrt((X - xc_NE)**2 + (Y - yc_NE)**2)
+    r_NO = np.sqrt((X - xc_NO)**2 + (Y - yc_NO)**2)
+    r_SO = np.sqrt((X - xc_SO)**2 + (Y - yc_SO)**2)
+    r_SE = np.sqrt((X - xc_SE)**2 + (Y - yc_SE)**2)
+    
+
+    # -------------------------------------------------
+    # Phase labeling
+    # -------------------------------------------------
+    
+    
+    phase = np.zeros((N, N), dtype=np.uint8)
+
+    phase[r_NE < radius] = 1
+    phase[r_NO < radius] = 2
+    phase[r_SO < radius] = 3
+    phase[r_SE < radius] = 4
+
+    print("Volumic fractions:")
+    print("matrix :", np.mean(phase == 0))
+    print("pore   :", np.mean(phase == 1))
+
+    # -------------------------------------------------
+    # Hybrid cells
+    # -------------------------------------------------
+    bool_hybrid = np.zeros_like(phase, dtype=bool)
+
+    bool_hybrid[np.abs(r_NE - radius) < dx] = True
+    bool_hybrid[np.abs(r_NO - radius) < dx] = True
+    bool_hybrid[np.abs(r_SO - radius) < dx] = True
+    bool_hybrid[np.abs(r_SE - radius) < dx] = True
+    
+    
+    
+
+    # -------------------------------------------------
+    # Volumic fraction of internal material
+    # -------------------------------------------------
+
+    volumic_fraction = np.ones((N, N))
+
+    Nloc = 1000
+
+    hybrid_indices = np.argwhere(bool_hybrid)
+
+    for i, j in hybrid_indices:
+
+        xmin = x[i] - dx / 2
+        xmax = x[i] + dx / 2
+
+        ymin = y[j] - dx / 2
+        ymax = y[j] + dx / 2
+
+        xx = np.linspace(xmin, xmax, Nloc)
+        yy = np.linspace(ymin, ymax, Nloc)
+
+        XX, YY = np.meshgrid(xx, yy, indexing="ij")
+
+        inside = (
+        ((XX - xc_NE)**2 + (YY - yc_NE)**2 < radius**2) |
+        ((XX - xc_NO)**2 + (YY - yc_NO)**2 < radius**2) |
+        ((XX - xc_SO)**2 + (YY - yc_SO)**2 < radius**2) |
+        ((XX - xc_SE)**2 + (YY - yc_SE)**2 < radius**2)
+        )
+
+        volumic_fraction[i, j] = np.mean(inside)
+
+    # -------------------------------------------------
+    # Phase couple
+    # -------------------------------------------------
+
+    phases_couple = np.zeros((N, N, 2), dtype=int)
+
+    phases_couple[r_NE < radius] = (1, 0)
+    phases_couple[r_NO < radius] = (2, 0)
+    phases_couple[r_SO < radius] = (3, 0)
+    phases_couple[r_SE < radius] = (4, 0)
+
+    # -------------------------------------------------
+    # Initial damage
+    # -------------------------------------------------
+
+    damage_init = np.zeros((N, N), dtype=np.float64)
+
+    # -------------------------------------------------
+    # PyVista grid
+    # -------------------------------------------------
+
+    grid = pv.ImageData(
+        dimensions=(N + 1, N + 1, 2),
+        spacing=(dx, dx, dx),
+        origin=(-L / 2, -L / 2, -dx / 2),
+    )
+
+    grid.cell_data["phase"] = phase.flatten(order="F")
+
+    grid.cell_data["bool_hybrid"] = bool_hybrid.flatten(order="F")
+
+    grid.cell_data["volumic_fraction"] = volumic_fraction.flatten(order="F")
+
+    grid.cell_data["damage_init"] = damage_init.flatten(order="F")
+
+    grid.cell_data["phases_couple"] = phases_couple.reshape((-1, 2),order="F")
+
+
+
+    grid.save(
+        f"results/homogenization_shear_{N}.vti"
+    )
+
+    return grid, phase
+
+
+
 
 #main_3_phases()
 #main_Hashin_an()
 #main_Hashin_num()
 #main_multigrid_single_voxel()
 #test_laminate_box()
-#damage_num_sin()
+damage_num_sin()
 #damage_num_2phases()
 #expansion_num_2phases()
 #elasticity_static_damage()
 #elasticity_evolving_damage()
-expansion_num_2phases_2D()
+#expansion_num_2phases_2D()
+#homogenization_shear_2D()
