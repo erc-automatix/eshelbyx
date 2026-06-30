@@ -1111,23 +1111,19 @@ def elasticity_evolving_damage():
     damage_init = np.zeros((Nx, Ny, 1), dtype=np.float64)
     bool_pre_damage = ((np.abs(Xc) < L_pre_damage / 2)& (np.abs(Yc) < tol_pre_damage))
     grid.cell_data["bool_pre_damage"] = bool_pre_damage.flatten(order="F")
-    #bool_pre_damage = np.abs(Yc) < tol_pre_damage
-    damage_init[bool_pre_damage] = 1.0
+    damage_init[bool_pre_damage] = 0.0
     grid.cell_data["damage_init"] = damage_init.flatten(order="F")
     
     
     # Small perturbation
     perturbation = np.ones((Nx, Ny, 1), dtype=np.float64)
-    #perturbation = 1-(1e-4*jnp.cos(Yc))
-    #perturbation = 1-(1e-2*jnp.exp(-jnp.abs(Yc)/(5*dy)))
-    perturbation[bool_pre_damage] = 1-(1e-4)
+    perturbation[bool_pre_damage] = 1e-6
     grid.cell_data["perturbation"] = perturbation.flatten(order="F")
     
     
     # Phase labeling
-    phase = np.zeros_like(damage_init, dtype=np.uint8)
-    phase[bool_pre_damage]=1
-    grid.cell_data["phase"] = phase.flatten()
+    phase = np.zeros((Nx, Ny, 1), dtype=np.uint8)
+    grid.cell_data["phase"] = phase.flatten(order="F")
     
     grid.save(f"results/elasticity_evolving_damage_{Ny}.vti") 
 
@@ -1508,10 +1504,10 @@ def homogenization_shear_2D():
 #main_Hashin_num()
 #main_multigrid_single_voxel()
 #test_laminate_box()
-damage_num_sin()
+#damage_num_sin()
 #damage_num_2phases()
 #expansion_num_2phases()
 #elasticity_static_damage()
-#elasticity_evolving_damage()
+elasticity_evolving_damage()
 #expansion_num_2phases_2D()
 #homogenization_shear_2D()
