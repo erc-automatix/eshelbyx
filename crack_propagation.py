@@ -66,7 +66,7 @@ current_folder = Path(__file__).parent.resolve()
 solver_elasticity = A2EM_iterativSolver
 
 # Solver for damage problem
-solver_damage = damage_EAEM_solver
+solver_damage = damage_Feugueur_solver
 
 # Discretization (FFT)
 discretization_used = WillotDiscretization
@@ -79,16 +79,16 @@ damage_model = "AT2"
 plot_stress_strain = True
 
 
-n_incr = 200    # number of increments for the loading
+n_incr = 20  # number of increments for the loading
 max_iter_elasticity = 5000  # maximum number of iterations per step for the elastic solver
 max_iter_damage = 5000  # maximum number of iterations per step for the damage solver
 tol_elasticity = 1e-6   # tolerance for the elastic solver (||error|| < tol => stop)
 tol_damage = 1e-6   # tolerance for the damage solver
 n_step_max = 500    # maximum number of steps per increment
-tol_step = 1e-6     # step tolerance (||dnew - dold|| < tol => stop)
+tol_step = 1e-4     # step tolerance (||dnew - dold|| < tol => stop)
 
 
-freq_save = 100     # save results in .vtk file every freq_save increments
+freq_save = 5     # save results in .vtk file every freq_save increments
 
 
 
@@ -115,11 +115,17 @@ def piecewise_field(field, value_map, grid):
 damage_init = pv_grid.cell_data["damage_init"]
 
 
+# Data extraction : bool_pre_damafe (pre crack : True)
+bool_pre_damage = pv_grid.cell_data["bool_pre_damage"]
+bool_pre_damage = bool_pre_damage.reshape((Nx,Ny,1),order="F")
+
+
 
 # Material parameters
 E_value = 1.0   # Young modulus
 nu_value = 0.0  # Poisson ratio
 Gc_value = 0.1  # Toughness
+
 
 dx = pv_grid.spacing[0]
 l0 = 5*dx   # Internal length for the regularized damage problem
@@ -138,14 +144,19 @@ C0 = IsotropicTensor4(kappa=lambda_0 + (2 / 3) * mu0, mu=mu0)
 
 
 
-# Material parameters mapping
+# Material parameters mappingflatten(order="F")
 E_map = {0: E_value}
 nu_map = {0: nu_value}
 E = piecewise_field(jnp.zeros(grid.shape), E_map, grid)
 nu = piecewise_field(jnp.zeros(grid.shape), nu_map, grid)
 
 
-
+"""
+# Data extraction : small perturbation of toughness
+perturbation = pv_grid.cell_data["perturbation"]
+Gc_value = Gc_value*perturbation
+Gc_value =  Gc_value.reshape((Nx,Ny,1),order="F")
+"""
 
 
 # ----------------------------------------------------------------------
@@ -278,7 +289,7 @@ material_params = (E.flatten(order="F"), nu.flatten(order="F"))
 
 
 # Final macroscopic strain E applied : E = (Exx, Eyy, Ezz, sqrt(2)Exy, sqrt(2)Exz, sqrt(2)Eyz)
-E_macro_final = SymmetricTensor2(array=jnp.asarray([0.0, 1.0, 0.0, 0.0, 0.0, 0.0]))
+E_macro_final = SymmetricTensor2(array=jnp.asarray([0.0, 1.0/10, 0.0, 0.0, 0.0, 0.0]))
 E_macro_final = grid.broadcast_to_grid(E_macro_final)  # create a field on the grid
 
 Delta_E_macro = E_macro_final/n_incr    # E_macro += Delta_E_macro every increment
@@ -341,22 +352,6 @@ def body_fun_step(state):
                 auto_scale=True,
                 verbose=False,
                 )
-            
-
-    elif solver_elasticity == A2EMSolver:
-        # A2EM solver
-        for solver in [A2EMSolver]:
-            eps, sig, info, scale, eps_aux, it_max_elasticity, delta_elasticity = solver(
-                E_macro,
-                alpha,
-                Gamma_0_elasticity,
-                tol=tol_elasticity,
-                max_iter=max_iter_elasticity,
-                auto_scale=True,
-                verbose=False,
-                )
-    
-    
     
     
     # Degradation function g(d)
@@ -369,30 +364,41 @@ def body_fun_step(state):
     W_elast_plus, W_elast_minus = energy_decomposition(eps_aux, alpha, scale, Gamma_0_elasticity)
     W_elast_0 = W_elast_plus/degrad_func
     
+    # if no spectral decomposition :
+    #W_elast = 0.5 * jnp.einsum("...ij,...ij->...", sig, eps)
+    #W_elast_0 = W_elast/degrad_func
     
-    
+    W_elast_0 = W_elast_0.at[bool_pre_damage].set(1e6)
     
     # Parameters for solving the damage problem
     if damage_model == "AT1":
         A = (8*W_elast_0)/(3*Gc_value*l0)
         B = (8*W_elast_0)/(3*Gc_value*l0) - (1/(2*(l0**2)))
+        
+
     
     elif damage_model == "AT2":
         A = (1/l0**2) + (2*W_elast_0/(Gc_value*l0))
         B = 2*W_elast_0/(Gc_value*l0)
         
     
+        
+    
+    
     
     # Reference A parameter depending on the damage solver used
     if solver_damage == damage_Feugueur_solver:
         A0 = (jnp.max(A)+jnp.min(A))/2
-    elif solver_damage == damage_EAEM_solver:
-        A0 = jnp.sqrt(jnp.max(A)*jnp.min(A))
         
+    elif solver_damage == damage_EAEM_solver:
+        #A0 = jnp.maximum(jnp.sqrt(jnp.max(A)*jnp.min(A)),10)
+        #A0 = jnp.sqrt(jnp.max(A)*jnp.min(A))
+        A0 = (jnp.max(A)+jnp.min(A))/2
         
         
     # Reshaping d
     d = jnp.array(d).reshape((grid.shape),order="F")
+    d_old = jnp.array(d_old).reshape((grid.shape),order="F")
     
     
     # Solving the damage problem (knowing the previous strain and stress fields)
@@ -402,7 +408,7 @@ def body_fun_step(state):
         
         # Solver
         for solver in [damage_Feugueur_solver]:
-            d, it_max_damage, delta_damage = solver(d, A, B, A0, Gamma_0_damage, max_iter = max_iter_damage, tol=tol_damage, verbose=False)
+            d, it_max_damage, delta_damage = solver(d, A, B, A0, Gamma_0_damage, d_old, max_iter = max_iter_damage, tol=tol_damage, verbose=False)
 
 
     elif solver_damage == damage_EAEM_solver:
@@ -411,7 +417,7 @@ def body_fun_step(state):
         
         # Solver
         for solver in [damage_EAEM_solver]:
-            d, it_max_damage, delta_damage = solver(d, A, B, A0, Gamma_0_damage, max_iter = max_iter_damage, tol=tol_damage, verbose=False)
+            d, it_max_damage, delta_damage = solver(d, A, B, A0, Gamma_0_damage, d_old, max_iter = max_iter_damage, tol=tol_damage, verbose=False)
 
 
 
@@ -421,11 +427,12 @@ def body_fun_step(state):
 
     # Reshaping d
     d = d.flatten(order="F")
+    d_old = d_old.flatten(order="F")
     
     
     
     # Irreversibility
-    d = jnp.maximum(d,d_old)    # Every damage fields computed in the steps must be greater than the damage field at the previous increment
+    #d = jnp.maximum(d,d_old)    # Every damage fields computed in the steps must be greater than the damage field at the previous increment
     
     err_step = jnp.sqrt(jnp.sum((d-d_beginning_step)**2))   # convergence error to go to another increment
     
@@ -570,17 +577,16 @@ for incr in range(n_incr):
 # ----------------------------------------------------------------
 
 if plot_stress_strain == True:
-    plt.plot(les_eps_mean, les_sig_mean, "-x", color = "blue" ,label = "numerical AT2")
+    plt.plot(les_eps_mean, les_sig_mean, "-x", color = "blue" ,label = "AT2 (EAEM)")
     #plt.axhline(y=sig_c_AT2, color="blue", linestyle="--", label = r"$\Sigma_{yy}^c (AT2)$")
     plt.plot(les_eps_mean, E_value*les_eps_mean, color = "orange", label = r"$\Sigma_{yy} = E \times E_{yy}$")
-    #plt.ylim(0,0.8)
+    plt.ylim(0,0.6)
     plt.legend()
     plt.grid()
     plt.xlabel(r"$E_{yy}$")
     plt.ylabel(r"$\Sigma_{yy}$")
     plt.show()
-    
-    
+     
 
 
 

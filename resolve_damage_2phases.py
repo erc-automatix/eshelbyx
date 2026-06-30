@@ -46,8 +46,8 @@ grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
 
 chi = 1e4 # contrast
 
-A_matrix = 1
-A_pore = A_matrix*chi
+A_matrix = 1e2
+A_pore = 1e6
 
 B_matrix = 1.0
 B_pore = B_matrix
@@ -71,25 +71,27 @@ B = piecewise_field(jnp.zeros(grid.shape), B_map, grid)
 # Reference A
 if solver_used == damage_Feugueur_solver:
     A0 = (jnp.max(A)+jnp.min(A))/2
+    
 elif solver_used == damage_EAEM_solver:
     A0 = jnp.sqrt(jnp.max(A)*jnp.min(A))
-    
+
+
+
 
 # Data extraction : damage init (=0)
 damage_init_data = pv_grid.cell_data["damage_init"]
-damage_init = jnp.array(damage_init_data).reshape(grid.shape)
+damage_init = jnp.array(damage_init_data).reshape(grid.shape,order="F")
 
 
 
 if solver_used == damage_Feugueur_solver:
     # Green operator
     Gamma_0 = DamageFeugueurGreenOperator(grid=grid, discretization=discretization_used(grid), A0 = A0)
-    #Gamma_0_err = DamageNaiveGreenOperator(grid=grid, discretization=discretization_used(grid))
     
     # Solver
     for solver in [damage_Feugueur_solver]:
         tic = time()
-        d, it_max_damage, delta_damage = solver(damage_init, A, B, A0, Gamma_0, damage_init, max_iter = 5000, tol=1e-6, verbose=True)
+        d, it_max_damage, delta_damage = solver(damage_init, A, B, A0, Gamma_0, damage_init, max_iter = 5000, tol=1e-4, verbose=True)
         print(f"{solver.__name__} solver time", time() - tic)
         print("\n")
 

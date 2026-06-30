@@ -43,18 +43,21 @@ grid, pv_grid = load_vtk_grid(file_name, marker_name="damage_init")
 
 # A field
 A_data = pv_grid.cell_data["A"]
-A = jnp.array(A_data).reshape(grid.shape)
+A = jnp.array(A_data).reshape(grid.shape,order="F")
 
 # B field
 B_data = pv_grid.cell_data["B"]
-B = jnp.array(B_data).reshape(grid.shape)
+B = jnp.array(B_data).reshape(grid.shape,order="F")
 
 # Reference A 
 A0 = (jnp.max(A)+jnp.min(A))/2
 
 # Data extraction : damage init (=0)
 damage_init_data = pv_grid.cell_data["damage_init"]
-damage_init = jnp.array(damage_init_data).reshape(grid.shape)
+damage_init = jnp.array(damage_init_data).reshape(grid.shape,order="F")
+
+# Irreversibility condition : d_old (-infini here because we don't need it for this analytical verification)
+damage_old = -1e6*jnp.ones_like(damage_init)
 
 
 
@@ -65,7 +68,7 @@ if solver_used == damage_Feugueur_solver:
     # Solver
     for solver in [damage_Feugueur_solver]:
         tic = time()
-        d = solver(damage_init, A, B, A0, Gamma_0, max_iter = 2000, tol=1e-6, verbose=True)
+        d, i_final, err_final = solver(damage_init, A, B, A0, Gamma_0, damage_old, max_iter = 500, tol=1e-6, verbose=True)
         print(f"{solver.__name__} solver time", time() - tic)
         print("\n")
 
@@ -79,14 +82,14 @@ elif solver_used == damage_EAEM_solver:
     # Solver
     for solver in [damage_EAEM_solver]:
         tic = time()
-        d = solver(damage_init, A, B, A0, Gamma_0, max_iter = 2000, tol=1e-6, verbose=True)
+        d, i_final, err_final = solver(damage_init, A, B, A0, Gamma_0, damage_old, max_iter = 500, tol=1e-6, verbose=True)
         print(f"{solver.__name__} solver time", time() - tic)
         print("\n")
         
         
         
 
-pv_grid.cell_data["damage_new"] = d.ravel()
+pv_grid.cell_data["damage_new"] = d.flatten(order="F")
 pv_grid.save(file_name.removesuffix(".vti") + "_results.vtk")
 
 

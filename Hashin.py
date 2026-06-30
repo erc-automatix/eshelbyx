@@ -37,10 +37,14 @@ current_folder = Path(__file__).parent.resolve()
 strat_hybrid = "None"
 
 # Solver
-solver_used = A2EM_iterativSolver
+solver_used = AEMSolver
 
 # Discretization
 discretization_used = WillotDiscretization
+
+
+# Iterativ computation : True of False
+bool_iterativ = False
 
 
 # Micro-structure created with microgen.py"
@@ -80,7 +84,7 @@ phi1 = (
 ) ** 3  # Volumic fraction of the central sphere in the set (central sphere + coating)
 phi2 = 1 - phi1  # Volumic fraction of the coating in the set (central sphere + coating)
 soft_center = True  # True : pore softer than the coating
-chi = 100  # Material contrast between central sphere and coating
+chi = 10  # Material contrast between central sphere and coating
 
 
 
@@ -208,7 +212,7 @@ def elastic_law(eps, material_params):
 def constitutive_law(eps, params):
     eps_flatten = eps.flatten_batch_dims()
     sig_flatten = jax.vmap(elastic_law)(eps_flatten, params)
-    return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape))
+    return SymmetricTensor2(tensor=sig_flatten.tensor.reshape(eps.tensor.shape,order="F"))
 
 
 # Material parameters mapping of reference medium for Moulinec and Suquet's solver
@@ -217,7 +221,7 @@ nu0_map = {0: nu0, 1: nu0, 2: nu0}
 E0 = piecewise_field(jnp.zeros(grid.shape), E0_map, grid)
 nu0 = piecewise_field(jnp.zeros(grid.shape), nu0_map, grid)
 
-material_params_0 = (E0.ravel(), nu0.ravel())
+material_params_0 = (E0.flatten(order="F"), nu0.flatten(order="F"))
 
 C_eps_0 = lambda eps: constitutive_law(eps, material_params_0)
 
@@ -440,7 +444,7 @@ def _apply_alpha(
 def apply_alpha(
     eps, params, bool_hybrid, params_int, params_ext, phi, C0, local_normal, C0_aniso
 ):
-    eps_flatten = SymmetricTensor2(tensor=jnp.asarray(eps).reshape(-1, 3, 3))
+    eps_flatten = SymmetricTensor2(tensor=jnp.asarray(eps).reshape((-1, 3, 3),order="F"))
     sig_tensor = jax.vmap(_apply_alpha, in_axes=(0, 0, 0, 0, 0, 0, None, 0, None))(
         eps_flatten,
         params,
@@ -452,14 +456,14 @@ def apply_alpha(
         local_normal,
         C0_aniso,
     )
-    return sig_tensor.tensor.reshape(eps.shape)
+    return sig_tensor.tensor.reshape(eps.shape,order="F")
 
 
-material_params = (E.ravel(), nu.ravel())
-bool_hybrid_list = bool_hybrid.ravel()
-material_params_int = (E_int.ravel(), nu_int.ravel())
-material_params_ext = (E_ext.ravel(), nu_ext.ravel())
-volumic_fraction_list = volumic_fraction.ravel()
+material_params = (E.flatten(order="F"), nu.flatten(order="F"))
+bool_hybrid_list = bool_hybrid.flatten(order="F")
+material_params_int = (E_int.flatten(order="F"), nu_int.flatten(order="F"))
+material_params_ext = (E_ext.flatten(order="F"), nu_ext.flatten(order="F"))
+volumic_fraction_list = volumic_fraction.flatten(order="F")
 
 
 alpha = lambda eps, scale=1.0: apply_alpha(
@@ -477,7 +481,7 @@ C_eps = lambda eps: constitutive_law(eps, material_params)
 
 
 
-n_incr = 10
+n_incr = 1
 
 # Macroscopic strain E applied
 E_macro_final = SymmetricTensor2(array=jnp.asarray([1.0, 1.0, 1.0, 0.0, 0.0, 0.0]))
@@ -488,7 +492,6 @@ Delta_E_macro = E_macro_final/n_incr
 
 # Green operator
 Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=discretization_used(grid))
-
 
 
 
@@ -505,24 +508,61 @@ sig = jnp.zeros_like(E_macro_final)
 scale_old = 1.0
 eps_aux_old = jnp.zeros_like(E_macro_final)
 
-#eps0 = Gamma_0.apply_C0_inv(sig)
-#eps_aux_old = 0.5 * (eps0 / scale_old + eps) 
 
 
-while incr< n_incr:
 
+
+# --------------------------------------------------
+# Iterativ computation with incremental loading
+# --------------------------------------------------
+if bool_iterativ == True :
     
-    # Incremental loading
-    E_macro = E_macro + Delta_E_macro
-    X_old = E_macro - eps - (1/scale_old)*Gamma_0.mv(sig - scale_old * Gamma_0.apply_C0(eps))
-    W_old = -Gamma_0.mv(sig)
+    solver_used = A2EM_iterativSolver
+    
+    while incr< n_incr:
+        
+        # Incremental loading
+        E_macro = E_macro + Delta_E_macro
+        X_old = E_macro - eps - (1/scale_old)*Gamma_0.mv(sig - scale_old * Gamma_0.apply_C0(eps))
+        W_old = -Gamma_0.mv(sig)
+
+        # A2EM iterativ solver
+        for solver in [A2EM_iterativSolver]:
+            tic = time()
+            eps, sig, info, scale_old, eps_aux_old, itf, Delta_f = solver(
+                eps_aux_old,
+                X_old,
+                scale_old,
+                W_old,
+                E_macro,
+                alpha,
+                Gamma_0,
+                tol=1e-6,
+                max_iter=500,
+                auto_scale=True,
+                verbose=True,
+                )
+        
+            print("Solver info:", info)  # ["num_steps"])
+            print(f"{solver.__name__} solver time", time() - tic)
+            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
+            print("\n")
+                
+        incr+=1
+
+ 
+# --------------------------------------------------
+# Non iterativ computation
+# --------------------------------------------------   
+
+else :
     
     # Numerical computation depending on the solver being used
     if solver_used == MSSolver:
         # Moulinec and Suquet's solver
         for solver in [MSSolver]:
             tic = time()
-            eps, sig, info = solver(E_macro, C_eps, C_eps_0, Gamma_0, tol=1e-6, max_iter=5)
+            eps, sig, info = solver(E_macro_final, C_eps, C_eps_0, Gamma_0, tol=1e-6, max_iter=5)
             print("Solver info:", info)  # ["num_steps"])
             print(f"{solver.__name__} solver time", time() - tic)
             print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
@@ -532,8 +572,8 @@ while incr< n_incr:
         # AEM solver
         for solver in [AEMSolver]:
             tic = time()
-            eps_aux, eps, sig, info = solver(
-                E_macro, alpha, Gamma_0, tol=1.0e-6, max_iter=500
+            eps, sig, info = solver(
+                E_macro_final, alpha, Gamma_0, tol=1.0e-6, max_iter=500
             )
             print("Solver info:", info)  # ["num_steps"])
             print(f"{solver.__name__} solver time", time() - tic)
@@ -545,8 +585,8 @@ while incr< n_incr:
         # A2EM solver
         for solver in [A2EMSolver]:
             tic = time()
-            eps, sig, info = solver(
-                E_macro,
+            eps, sig, info, scale_f, eps_aux_f, itf, Delta_f = solver(
+                E_macro_final,
                 alpha,
                 Gamma_0,
                 tol=1e-6,
@@ -564,37 +604,13 @@ while incr< n_incr:
         # Krylov-AEM solver
         for solver in [KrylovAEMSolver]:
             tic = time()
-            eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1e-6, max_iter=300)
+            eps, sig, info = solver(E_macro_final, alpha, Gamma_0, tol=1e-6, max_iter=300)
             print("Solver info:", info)  # ["num_steps"])
             print(f"{solver.__name__} solver time", time() - tic)
             print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-            print("\n")
+            print("\n")        
             
-            
-    elif solver_used == A2EM_iterativSolver:
-        # A2EM solver
-        for solver in [A2EM_iterativSolver]:
-            tic = time()
-            eps, sig, info, scale_old, eps_aux_old = solver(
-                eps_aux_old,
-                X_old,
-                scale_old,
-                W_old,
-                E_macro,
-                alpha,
-                Gamma_0,
-                tol=1e-6,
-                max_iter=500,
-                auto_scale=True,
-                verbose=True,
-                )
     
-            print("Solver info:", info)  # ["num_steps"])
-            print(f"{solver.__name__} solver time", time() - tic)
-            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-            print("\n")
-            
-    incr+=1
 
 
 
@@ -603,22 +619,22 @@ while incr< n_incr:
 
 
 # store results
-pv_grid.cell_data["strain"] = eps.reshape((-1, 3, 3))
-pv_grid.cell_data["stress"] = sig.reshape((-1, 3, 3))
+pv_grid.cell_data["strain"] = eps.reshape((-1, 3, 3),order="F")
+pv_grid.cell_data["stress"] = sig.reshape((-1, 3, 3),order="F")
 
 
 # Extraction of the zz component of the stress
-sigma_zz = sig[..., 2, 2].ravel()
+sigma_zz = sig[..., 2, 2].flatten(order="F")
 pv_grid.cell_data["stress_zz"] = sigma_zz
 
 
 # Extraction of the zz component of the strain
-eps_zz = eps[..., 2, 2].ravel()
+eps_zz = eps[..., 2, 2].flatten(order="F")
 pv_grid.cell_data["eps_zz"] = eps_zz
 
 # Extraction of the elastic energy
 W_elast = 0.5 * jnp.einsum("...ij,...ij->...", sig, eps)
-pv_grid.cell_data["W_elast"] = W_elast.ravel()
+pv_grid.cell_data["W_elast"] = W_elast.flatten(order="F")
 
 
 

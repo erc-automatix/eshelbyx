@@ -102,7 +102,7 @@ eps_ext = SymmetricTensor2(array=jnp.asarray([eps_ext_value, eps_ext_value, eps_
 
 Id = SymmetricTensor2(array=jnp.asarray([1.0, 1.0, 1.0, 0.0, 0.0, 0.0]))
 Id = grid.broadcast_to_grid(Id)
-Id_flatten = SymmetricTensor2(tensor=jnp.asarray(Id).reshape(-1, 3, 3))
+Id_flatten = SymmetricTensor2(tensor=jnp.asarray(Id).reshape((-1, 3, 3),order="F"))
 
 C_inc = IsotropicTensor4(kappa=lmbda_inc + (2 / 3) * mu_inc, mu=mu_inc)
 
@@ -117,9 +117,9 @@ mask_inc = (grid.markers == 1)
 mask_matrix = (grid.markers == 0)
 mask_coat = (grid.markers == 2)
 
-mask_inc_flat = mask_inc.reshape(-1)
-mask_matrix_flat = mask_matrix.reshape(-1)
-mask_coat_flat = mask_coat.reshape(-1)
+mask_inc_flat = mask_inc.reshape(-1,order="F")
+mask_matrix_flat = mask_matrix.reshape(-1,order="F")
+mask_coat_flat = mask_coat.reshape(-1,order="F")
 
 
 eps_load_array = jnp.zeros_like(Id_flatten)
@@ -128,7 +128,7 @@ eps_load_array = jnp.where(mask_matrix_flat[:, None, None], eps_load_matrix_arra
 
 
 N = pv_grid.dimensions[0] - 1
-eps_load = eps_load_array.reshape(N, N, N, 3, 3)
+eps_load = eps_load_array.reshape((N, N, N, 3, 3),order="F")
 pv_grid.cell_data["strain_load"] = eps_load.reshape((-1, 3, 3), order="F")
 
 
@@ -347,7 +347,7 @@ def _apply_alpha(
 def apply_alpha(
     eps, params, bool_hybrid, params_int, params_ext, phi, C0
 ):
-    eps_flatten = SymmetricTensor2(tensor=jnp.asarray(eps).reshape(-1, 3, 3))
+    eps_flatten = SymmetricTensor2(tensor=jnp.asarray(eps).reshape((-1, 3, 3),order="F"))
     sig_tensor = jax.vmap(_apply_alpha, in_axes=(0, 0, 0, 0, 0, 0, None))(
         eps_flatten,
         params,
@@ -357,14 +357,14 @@ def apply_alpha(
         phi,
         C0,
     )
-    return sig_tensor.tensor.reshape(eps.shape)
+    return sig_tensor.tensor.reshape(eps.shape,order="F")
 
 
-material_params = (E.ravel(), nu.ravel())
-bool_hybrid_list = bool_hybrid.ravel()
-material_params_int = (E_int.ravel(), nu_int.ravel())
-material_params_ext = (E_ext.ravel(), nu_ext.ravel())
-volumic_fraction_list = volumic_fraction.ravel()
+material_params = (E.flatten(order="F"), nu.flatten(order="F"))
+bool_hybrid_list = bool_hybrid.flatten(order="F")
+material_params_int = (E_int.flatten(order="F"), nu_int.flatten(order="F"))
+material_params_ext = (E_ext.flatten(order="F"), nu_ext.flatten(order="F"))
+volumic_fraction_list = volumic_fraction.flatten(order="F")
 
 
 alpha = lambda eps, scale=1.0: apply_alpha(
@@ -389,20 +389,9 @@ Gamma_0 = GreenOperator(grid=grid, C0=C0, discretization=discretization_used(gri
 
 # Numerical computation depending on the solver being used
 
-# AEM expansion solver
-if solver_used == AEM_expansionSolver:
-    for solver in [AEM_expansionSolver]:
-        tic = time()
-        eps, sig, info = solver(
-            eps_load, alpha, Gamma_0, tol=1e-6, max_iter=1000
-        )
-        print("Solver info:", info)  # ["num_steps"])
-        print(f"{solver.__name__} solver time", time() - tic)
-        print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-        print("\n")
-       
+
         
-elif solver_used == A2EM_expansionSolver:
+if solver_used == A2EM_expansionSolver:
     # A2EM solver
     for solver in [A2EM_expansionSolver]:
         tic = time()
@@ -423,8 +412,8 @@ elif solver_used == A2EM_expansionSolver:
 
 
 # store results
-pv_grid.cell_data["strain"] = eps.reshape((-1, 3, 3))
-pv_grid.cell_data["stress"] = sig.reshape((-1, 3, 3))
+pv_grid.cell_data["strain"] = eps.reshape((-1, 3, 3),order="F")
+pv_grid.cell_data["stress"] = sig.reshape((-1, 3, 3),order="F")
 
 
 # Extraction of the elastic energy
@@ -508,9 +497,9 @@ sig_an = jnp.where(mask_inc_flat[:, None, None], -P*Id_flatten, sig_an)
 sig_an = jnp.where(mask_matrix_flat[:, None, None], 0, sig_an)
 sig_an = jnp.where(mask_coat_flat[:, None, None], sig_coat, sig_an)
 
-sig_an = sig_an.reshape(N, N, N, 3, 3)
+sig_an = sig_an.reshape((N, N, N, 3, 3),order="F")
 
-pv_grid.cell_data["sig_an"] = sig_an.reshape((-1, 3, 3))
+pv_grid.cell_data["sig_an"] = sig_an.reshape((-1, 3, 3),order="F")
 
 
 eps_an = jnp.zeros_like(Id_flatten)
@@ -518,20 +507,20 @@ eps_an = jnp.where(mask_inc_flat[:, None, None], Id_flatten*eps_int_value, eps_a
 eps_an = jnp.where(mask_matrix_flat[:, None, None], eps_load_matrix, eps_an)
 eps_an = jnp.where(mask_coat_flat[:, None, None], eps_coat, eps_an)
 
-eps_an = eps_an.reshape(N, N, N, 3, 3)
+eps_an = eps_an.reshape((N, N, N, 3, 3),order="F")
 
-pv_grid.cell_data["sig_an"] = sig_an.reshape((-1, 3, 3))
-pv_grid.cell_data["eps_an"] = eps_an.reshape((-1, 3, 3))
+pv_grid.cell_data["sig_an"] = sig_an.reshape((-1, 3, 3),order="F")
+pv_grid.cell_data["eps_an"] = eps_an.reshape((-1, 3, 3),order="F")
 
 W_elast_an = 0.5 * jnp.einsum("...ij,...ij->...", sig_an, eps_an)
 
-pv_grid.cell_data["W_elast_num"] = W_elast_num.ravel()
-pv_grid.cell_data["W_elast_an"] = W_elast_an.ravel()
+pv_grid.cell_data["W_elast_num"] = W_elast_num.flatten(order="F")
+pv_grid.cell_data["W_elast_an"] = W_elast_an.flatten(order="F")
 
 
 
 err = 100*jnp.abs(W_elast_num-W_elast_an)/jnp.max(W_elast_an)
-pv_grid.cell_data["err"] = err.ravel()
+pv_grid.cell_data["err"] = err.flatten(order="F")
 
 
 pv_grid.save(file_name.removesuffix(".vti") + "_results.vtk")

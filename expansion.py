@@ -43,7 +43,7 @@ discretization_used = WillotDiscretization
 solver_used = A2EM_iterativ_expansionSolver
 
 # Hybrid voxels treatment depending on the strategy
-strat_hybrid = "None"
+strat_hybrid = "alpha"
 
 
 # Micro-structure created with microgen.py
@@ -90,7 +90,9 @@ def piecewise_field_couple(field, value_map, markers):
     return field
 
 
-
+# Data extraction : volumic fraction (of the internal phase for hybrid voxels)
+volumic_fraction_data = pv_grid.cell_data["volumic_fraction"]
+volumic_fraction = jnp.array(volumic_fraction_data)
 
 
 # ------------------------------------------------------
@@ -103,8 +105,10 @@ beta = 0.1
 Id = SymmetricTensor2(array=jnp.asarray([1.0, 1.0, 0.0, 0.0, 0.0, 0.0]))
 
 eps_load_final = grid.broadcast_to_grid(Id * beta)
-eps_load_final = eps_load_final * bool_load[..., None] 
-eps_load_final = jnp.asarray(eps_load_final)
+eps_load_final = eps_load_final * bool_load[..., None]
+vf = volumic_fraction.reshape(grid.shape, order="F")
+eps_load_final = vf[...,None,None]*jnp.asarray(eps_load_final)
+#eps_load_final = jnp.asarray(eps_load_final)
 
 pv_grid.cell_data["strain_load_final"] = eps_load_final.reshape((-1, 3, 3),order="F")
 
@@ -145,10 +149,6 @@ nu = piecewise_field(jnp.zeros(grid.shape), nu_map, grid)
 bool_hybrid_data = pv_grid.cell_data["bool_hybrid"]
 bool_hybrid = jnp.array(bool_hybrid_data)
 
-
-# Data extraction : volumic fraction (of the internal phase for hybrid voxels)
-volumic_fraction_data = pv_grid.cell_data["volumic_fraction"]
-volumic_fraction = jnp.array(volumic_fraction_data)
 
 # Data extraction : phases couple (internal and external phases for hybrid voxels)
 phases_couple_data = pv_grid.cell_data["phases_couple"]
@@ -350,6 +350,9 @@ def mean_field(X):
 
 
 
+
+
+
 # ---------------------------------------------------
 # Definition of the increment loop
 # ---------------------------------------------------
@@ -373,23 +376,9 @@ def body_fun_incr(state):
     X = -(1/scale)*Gamma_0.apply_C0_inv(mean_field(sig)) + mean_field(eps) - eps - (1/scale)*Gamma_0.mv(sig) + Gamma_0.mv(Gamma_0.apply_C0(eps))
     W = -Gamma_0.mv(sig)
     
-
-    # Numerical computation depending on the solver being used
-    
-    # AEM expansion solver
-    if solver_used == AEM_expansionSolver:
-        for solver in [AEM_expansionSolver]:
-            tic = time()
-            eps, sig, info = solver(
-                eps_load, alpha, Gamma_0, tol=1e-6, max_iter=1000
-            )
-            print("Solver info:", info)  # ["num_steps"])
-            print(f"{solver.__name__} solver time", time() - tic)
-            print("Mean stress", jnp.mean(sig, axis=[0, 1, 2]))
-            print("\n")
            
             
-    elif solver_used == A2EM_iterativ_expansionSolver:
+    if solver_used == A2EM_iterativ_expansionSolver:
         # A2EM solver
         for solver in [A2EM_iterativ_expansionSolver]:
             tic = time()
@@ -428,6 +417,8 @@ eps = jnp.zeros_like(eps_load_final)
 sig = jnp.zeros_like(eps_load_final)
 scale = 1.0
 eps_aux = jnp.zeros_like(eps_load_final)
+
+
 
 
 
