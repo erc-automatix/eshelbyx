@@ -375,10 +375,10 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 100
         #d_new = OperatorFFT(xi)
         
         xi_new = B - ((A-A0)*d_new)
-        #err = norm2(xi_new-xi)/norm2(xi_new)
+        err = norm2(xi_new-xi)/norm2(xi_new)
         
         # New error
-        err = norm2(d_new - OperatorFFT(xi_new))
+        #err = norm2(d_new - OperatorFFT(xi_new))
         
         
         
@@ -405,6 +405,9 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 100
   
 
 
+
+
+
 def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 1000, tol=1e-6, verbose=True):
     """
     Damage solver with EAEM methodology
@@ -415,7 +418,7 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 1000, t
     # --------------------------
     
     # FFT operator : X/(A0 + ξ.ξ)
-    def OperatorFFT(X):
+    def OperatorFFT(X,Gamma_0):
         return Gamma_0.mv(X)
     
     # L2 norm of the field X
@@ -427,13 +430,12 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 1000, t
         return jnp.clip(d, d_old, 1.0)
     
     
-    alpha = 2*A0/(A+A0)     # Auxiliar parameter in [0,2]
     
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
+    alpha = 2*A0/(A+A0)
     d_aux = damage_init/alpha
-    X = OperatorFFT(B) - alpha*d_aux - OperatorFFT(2*A0*(1-alpha)*d_aux)
     lmbda = 1.0     # Scalar parameter used to minimize the residual at each iteration
     
     convergence_history = {
@@ -445,54 +447,62 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 1000, t
     # Loop
     # ------------------------------------------------------------------
     def cond_fun(state):
-        i, _, _, _, err, _ = state
+        i, _, _, err, _,_ = state
         return jnp.logical_and(i < max_iter, err >= tol)
     
     
     def body_fun(state):
-        i, d_aux, X, _, err, convergence_history = state
-        Z = alpha*X + OperatorFFT(2*A0*(1-alpha)*X)
-        lmbda = jnp.sum(X*Z)/jnp.sum(Z**2)
-        X_new = X - lmbda*Z
-        d_aux_new = d_aux + lmbda*X
     
-        d = projector_damage(alpha*d_aux, d_old)
-        d_new = projector_damage(alpha*d_aux_new, d_old)
-        d = alpha*d_aux
-        d_new = alpha*d_aux_new
+        i, d_aux, _, err, convergence_history, A0 = state  
         
-        d_aux_new = d_new/alpha
+        alpha = 2*A0/(A+A0)     # Auxiliar parameter in [0,2]
+        X = OperatorFFT(B-(2*A0*(1-alpha)*d_aux), Gamma_0(A0)) - alpha*d_aux
+        Z = alpha*X + OperatorFFT(2*A0*(1-alpha)*X, Gamma_0(A0))
+        lmbda = jnp.sum(X*Z)/jnp.sum(Z**2)
+        d_aux_new = d_aux + lmbda*X
         
-
-        #err = jnp.minimum(norm2(d_new-d), norm2(X_new))  # uniform case : X_new = 0
-        #err = norm2(X_new)
+        # New reference medium
+        #A0_new = norm2(B-((2-alpha)*A0*d_aux_new))/norm2(alpha*d_aux_new)
+        A0_new = norm2(B-((2-alpha)*A0*d_aux_new))/norm2(alpha*d_aux_new)
+        #A0_new = A0
+        k0 = A0_new/A0
+        alpha_new = 2*A0_new/(A+A0_new) 
+        d_aux_new = (2*d_aux_new) / ( ((2-alpha_new)*k0) +alpha_new)
         
-        # New error
-        xi_new = B - ((A-A0)*d_new)
-        err = norm2(d_new - OperatorFFT(xi_new))
+        # Error
+        d_new = projector_damage(alpha_new*d_aux_new,d_old)
+        xi_new = B - ((A-A0_new)*d_new)
+        err = norm2(d_new - OperatorFFT(xi_new, Gamma_0(A0_new)))
 
         convergence_history["err"] = convergence_history["err"].at[i].set(err)
         if verbose:
             jax.debug.print(
-                "Iteration {}  err = {:.5e} lmbda = {:.5e}",
+                "Iteration {}  err = {:.5e} lmbda = {:.5e} A0 = {:.5e}",
                 i,
                 err,
                 lmbda,
+                A0_new,
             )
-        return i + 1, d_aux_new, X_new, lmbda, err, convergence_history
-    
+            
+            
+        d_aux_new = d_new/alpha_new
+        
+        return i + 1, d_aux_new, lmbda, err, convergence_history, A0_new
     
     # ------------------------------------------------------------------
     # Run
     # ------------------------------------------------------------------
-    init_state = (0, d_aux, X, lmbda, jnp.inf, convergence_history)
-    i_final, d_aux_final, _, _, err_final, convergence_history = jax.lax.while_loop(
+    init_state = (0, d_aux, lmbda, jnp.inf, convergence_history, A0)
+    i_final, d_aux_final, _, err_final, convergence_history, A0_final = jax.lax.while_loop(
         cond_fun, body_fun, init_state
     )
     
-    d_final = projector_damage(alpha*d_aux_final, d_old)
+    alpha_final = 2*A0_final/(A+A0_final)     
+
+    d_final = projector_damage(alpha_final*d_aux_final, d_old)
     
     return d_final, i_final, err_final
+
 
 
 

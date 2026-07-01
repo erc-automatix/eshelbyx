@@ -46,8 +46,8 @@ grid, pv_grid = load_vtk_grid(file_name, marker_name="phase")
 
 chi = 1e4 # contrast
 
-A_matrix = 1e2
-A_pore = 1e6
+A_matrix = 1
+A_pore = 1e4
 
 B_matrix = 1.0
 B_pore = B_matrix
@@ -75,12 +75,29 @@ if solver_used == damage_Feugueur_solver:
 elif solver_used == damage_EAEM_solver:
     A0 = jnp.sqrt(jnp.max(A)*jnp.min(A))
 
+A0 = 1e12
+
+
+
+# L2 norm of the field X
+def norm2(X):
+    return jnp.sqrt(jnp.sum(X**2))
 
 
 
 # Data extraction : damage init (=0)
 damage_init_data = pv_grid.cell_data["damage_init"]
 damage_init = jnp.array(damage_init_data).reshape(grid.shape,order="F")
+
+
+
+
+# Damage Green Operator : function of A0
+@eqx.filter_jit
+def Gamma_0_func(A0):
+    return DamageFeugueurGreenOperator(grid=grid, discretization=discretization_used(grid), A0 = A0)
+
+Gamma_0 = lambda A0: Gamma_0_func(A0)
 
 
 
@@ -97,13 +114,15 @@ if solver_used == damage_Feugueur_solver:
 
 
 elif solver_used == damage_EAEM_solver:
+    
+    
     # Green operator
-    Gamma_0 = DamageFeugueurGreenOperator(grid=grid, discretization=discretization_used(grid), A0 = A0)
+    #Gamma_0 = DamageFeugueurGreenOperator(grid=grid, discretization=discretization_used(grid), A0 = A0)
     
     # Solver
     for solver in [damage_EAEM_solver]:
         tic = time()
-        d, it_max_damage, delta_damage = solver(damage_init, A, B, A0, Gamma_0, damage_init, max_iter = 5000, tol=1e-6, verbose=True)
+        d, it_max_damage, delta_damage = solver(damage_init, A, B, A0, Gamma_0, damage_init, max_iter = 1000, tol=1e-6, verbose=True)
         print(f"{solver.__name__} solver time", time() - tic)
         print("\n")
         
