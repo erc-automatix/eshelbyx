@@ -1,11 +1,59 @@
 import jax
 import jax.numpy as jnp
 import equinox as eqx
-from functools import partial
-from jaxmat.tensors import SymmetricTensor2
 
 
-# @eqx.debug.assert_max_traces(max_traces=1)
+# --------------------------------------------------------------------------- #
+# Shared helpers
+# --------------------------------------------------------------------------- #
+def _to_array(x):
+    """Coerce a jaxmat tensor (or array-like) to a raw ``(..., 3, 3)`` array.
+
+    The solvers operate internally on raw arrays; this lets callers pass either
+    a ``SymmetricTensor2`` field or a plain array for ``E_macro`` and for the
+    constitutive callables.
+    """
+    t = getattr(x, "tensor", None)
+    return t if t is not None else jnp.asarray(x)
+
+
+def _safe_div(num, den, floor=1e-300):
+    """``num / den`` that returns 0 where ``|den| <= floor``.
+
+    This turns the degenerate ``0/0`` ratios that appear when the exact solution
+    is reached (homogeneous media, zero macroscopic strain) into 0 instead of
+    ``NaN``, so the fixed-point iterations terminate cleanly.
+    """
+    ok = jnp.abs(den) > floor
+    return jnp.where(ok, num / jnp.where(ok, den, 1.0), 0.0)
+
+
+def _operators(Gamma_0):
+    """Build the ``C0`` inner product, its induced norm, and the projector onto
+    compatible strains for a given reference Green operator.
+
+    The inner product uses a conjugate so it is valid for complex fields and
+    reduces to the usual real energy product for real fields.
+    """
+
+    def inner(X, Y):
+        return jnp.sum(
+            jnp.einsum("...ij,...ij->...", jnp.conjugate(X), Gamma_0.apply_C0(Y))
+        )
+
+    def norm(X):
+        return jnp.sqrt(jnp.real(inner(X, X)))
+
+    def project(X):
+        # P = Gamma_0 . C0  : projection onto compatible, zero-mean strains
+        return Gamma_0.mv(Gamma_0.apply_C0(X))
+
+    return inner, norm, project
+
+
+# --------------------------------------------------------------------------- #
+# Adaptive Eyre–Milton with reference-medium auto-scaling (A2EM)
+# --------------------------------------------------------------------------- #
 @eqx.filter_jit
 def A2EMSolver(
     E_macro,
@@ -15,299 +63,221 @@ def A2EMSolver(
     tol=1e-10,
     auto_scale=True,
     step_adaptation=True,
-    verbose=True,
+    verbose=False,
 ):
+    """Adaptive Eyre–Milton solver with reference-medium auto-scaling.
 
-    # ------------------------
-    # Helpers
-    # ------------------------
-    def C0_inner_product(X, Y):
-        return jnp.einsum("...ij,...ij->", X, Gamma_0.apply_C0(Y))
+    Parameters
+    ----------
+    E_macro : array or SymmetricTensor2
+        Imposed macroscopic strain, broadcast to the grid.
+    alpha : callable
+        ``alpha(eps_aux, scale)`` returning the true strain from the auxiliary
+        strain; ``scale`` rescales the reference medium (``scale * C0``).
+    Gamma_0 : GreenOperator
+        Reference-medium Green operator (provides ``apply_C0``, ``apply_C0_inv``
+        and ``mv``).
 
-    def ref_norm(X):
-        return jnp.sqrt(C0_inner_product(X, X))
+    Returns
+    -------
+    eps, sigma : arrays of shape ``grid.shape + (3, 3)``
+    info : dict with ``num_steps``, ``Delta_final``, ``scale_final``.
 
-    def projection_on_D(X):
-        z = Gamma_0.apply_C0(X)
-        return Gamma_0.mv(z)
+    Notes
+    -----
+    Robust to homogeneous media and to ``E_macro == 0``: all ratios are guarded
+    and the auto-scale is *frozen* once the strain fluctuation drops below a
+    relative floor, which previously drove ``scale`` to ~1e12 and destroyed the
+    accuracy of the reconstructed stress on (near-)homogeneous problems.
+    """
+    E_macro = _to_array(E_macro)
+    inner, norm, project = _operators(Gamma_0)
 
-    # ------------------------
-    # One AEM iteration
-    # ------------------------
+    E_ref = norm(E_macro)
+    floor = jnp.maximum(1e-30, 1e-14 * E_ref)  # relative denominator floor
+
     def step(carry):
         it, X, eps_aux, W, scale, Delta = carry
-        aX = alpha(X, scale)
-        Y = projection_on_D(aX)
 
-        Z = aX - 2.0 * Y + 2 * W / scale
+        aX = alpha(X, scale)
+        Y = project(aX)
+        Z = aX - 2.0 * Y + 2.0 * W / scale
 
         if step_adaptation:
-            lam_new = C0_inner_product(X, Z) / C0_inner_product(Z, Z)
+            lam = _safe_div(inner(X, Z), inner(Z, Z))
         else:
-            lam_new = 1.0
+            lam = 1.0
 
-        eps_aux_new = eps_aux + lam_new * X
+        eps_aux_new = eps_aux + lam * X
         eps_new = alpha(eps_aux_new, scale)
-
         sig_new = scale * Gamma_0.apply_C0(2.0 * eps_aux_new - eps_new)
-
-        W_new = (1 - 2 * lam_new) * W + lam_new * scale * Y
+        W_new = (1.0 - 2.0 * lam) * W + lam * scale * Y
 
         eps0 = Gamma_0.apply_C0_inv(sig_new)
-        E_norm = jnp.maximum(ref_norm(E_macro - eps_new), 1e-16)
-        k_A2EM = ref_norm(eps0) / E_norm
-        new_scale = jax.lax.select(auto_scale, k_A2EM, 1.0)
+        E_norm = norm(E_macro - eps_new)
+
+        # Adapt the reference scale only while the fluctuation is significant;
+        # freeze it otherwise so the final reconstruction stays well-conditioned.
+        k = _safe_div(norm(eps0), E_norm)
+        adapt = jnp.logical_and(auto_scale, E_norm > floor)
+        new_scale = jnp.where(adapt, k, scale)
 
         eps_aux_new = 0.5 * (eps0 / new_scale + eps_new)
+        X_new = X - lam * Z + (1.0 / new_scale - 1.0 / scale) * W_new
+        Delta_new = _safe_div(norm(X_new), jnp.maximum(E_norm, floor))
 
-        X_new = X - lam_new * Z + (1 / new_scale - 1 / scale) * W_new
-        Delta_new = ref_norm(X_new) / E_norm
         if verbose:
             jax.debug.print(
-                "Iteration {} ||X|| = {:.5e} Delta = {:.5e} ||sig|| = {:.5e} k_A2EM = {:.5e} lambda = {:.5e} scale = {:.5e}",
+                "A2EM it {} ||X||={:.3e} Delta={:.3e} lambda={:.3e} scale={:.3e}",
                 it,
-                ref_norm(X) / ref_norm(E_macro),
+                _safe_div(norm(X), jnp.maximum(E_ref, floor)),
                 Delta_new,
-                jnp.mean(jnp.linalg.matrix_norm(sig_new)),
-                k_A2EM,
-                lam_new,
+                lam,
                 new_scale,
             )
-        return (
-            it + 1,
-            X_new,
-            eps_aux_new,
-            W_new,
-            new_scale,
-            Delta_new,
-        )
+        return it + 1, X_new, eps_aux_new, W_new, new_scale, Delta_new
 
-    # ------------------------
-    # While condition
-    # ------------------------
     def cond(carry):
         it, _, _, _, _, Delta = carry
         return jnp.logical_and(it < max_iter, Delta > tol)
 
-    # ------------------------
-    # Initial state
-    # ------------------------
-    init_carry = (
+    init = (
         0,
-        jnp.asarray(E_macro),
+        E_macro,
         jnp.zeros_like(E_macro),
         jnp.zeros_like(E_macro),
         1.0,
         jnp.inf,
     )
+    itf, _, eps_aux_f, _, scale_f, Delta_f = jax.lax.while_loop(cond, step, init)
 
-    # ------------------------
-    # Run while-loop (true early stop)
-    # ------------------------
-    itf, Xf, eps_aux_f, W_f, scale_f, Delta_f = jax.lax.while_loop(
-        cond, step, init_carry
-    )
-
-    # ------------------------
-    # Final fields
-    # ------------------------
     eps = alpha(eps_aux_f, scale_f)
     sigma = scale_f * Gamma_0.apply_C0(2.0 * eps_aux_f - eps)
-
-    convergence_history = {
-        "num_steps": itf,
-        "Delta_final": Delta_f,
-        "scale_final": scale_f,
-    }
-
-    return eps, sigma, convergence_history
+    info = {"num_steps": itf, "Delta_final": Delta_f, "scale_final": scale_f}
+    return eps, sigma, info
 
 
-def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
+# --------------------------------------------------------------------------- #
+# Adaptive Eyre–Milton (AEM)
+# --------------------------------------------------------------------------- #
+@eqx.filter_jit
+def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=False):
+    """Adaptive Eyre–Milton solver (fixed reference medium).
+
+    Returns raw ``(..., 3, 3)`` arrays and an ``info`` dict with ``num_steps``,
+    ``Delta_final`` and a per-iteration ``Delta`` history.
+
+    Robust to homogeneous media: the previous version produced ``NaN`` when the
+    exact solution was reached in a single step (``0/0`` in both ``Delta`` and
+    the step length ``lambda``); those ratios are now guarded.
     """
-    Adaptive Eyre–Milton (AEM) solver – minimal version
+    E_macro = _to_array(E_macro)
+    inner, norm, project = _operators(Gamma_0)
+
+    E_ref = norm(E_macro)
+    floor = jnp.maximum(1e-30, 1e-14 * E_ref)
+
+    history = {"Delta": jnp.zeros((max_iter,)), "lambda": jnp.zeros((max_iter,))}
+
+    def cond(state):
+        i, _, _, _, Delta, _ = state
+        return jnp.logical_and(i < max_iter, Delta > tol)
+
+    def body(state):
+        i, X, eps_aux, _, _, hist = state
+
+        eps = alpha(eps_aux)
+        Delta = _safe_div(norm(X), jnp.maximum(norm(E_macro - eps), floor))
+
+        aX = alpha(X)
+        Z = aX + 2.0 * project(X - aX)
+        lam = _safe_div(inner(X, Z), inner(Z, Z))
+
+        eps_aux_new = eps_aux + lam * X
+        X_new = X - lam * Z
+
+        hist = {
+            "Delta": hist["Delta"].at[i].set(Delta),
+            "lambda": hist["lambda"].at[i].set(jnp.real(lam)),
+        }
+        if verbose:
+            jax.debug.print("AEM it {} Delta={:.5e} lambda={:.5e}", i, Delta, lam)
+        return i + 1, X_new, eps_aux_new, lam, Delta, hist
+
+    init = (0, E_macro, jnp.zeros_like(E_macro), 0.0, jnp.inf, history)
+    i_f, _, eps_aux_f, _, Delta_f, history = jax.lax.while_loop(cond, body, init)
+
+    eps = alpha(eps_aux_f)
+    sigma = Gamma_0.apply_C0(2.0 * eps_aux_f - eps)
+    info = {
+        "num_steps": i_f,
+        "iterations": i_f,  # backward-compatible alias
+        "Delta_final": Delta_f,
+        "history": history,
+    }
+    return eps, sigma, info
+
+
+# --------------------------------------------------------------------------- #
+# Basic Moulinec–Suquet scheme
+# --------------------------------------------------------------------------- #
+@eqx.filter_jit
+def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=False):
+    """Moulinec–Suquet fixed-point solver.
+
+    Parameters
+    ----------
+    C_eps, C_eps_0 : callables
+        Raw-array constitutive maps, ``eps -> sigma`` with both of shape
+        ``grid.shape + (3, 3)``. ``C_eps`` is the true material law and
+        ``C_eps_0`` applies the reference stiffness ``C0``. (Passing raw-array
+        callables — rather than tensor-valued ones — keeps the solver decoupled
+        from the tensor backend and matrix-free.)
 
     Returns
     -------
-    eps : final strain field
-    sigma : final stress field
-    info : dict with convergence info
+    eps, sigma : arrays of shape ``grid.shape + (3, 3)``
+    info : dict with ``num_steps`` and a per-iteration ``Delta`` history.
+
+    Notes
+    -----
+    The basic MS scheme converges only when the reference medium is stiff enough
+    (roughly ``C < 2 C0``); with a softer reference it diverges. The iteration is
+    now guarded against ``E_macro == 0`` (division by ``||E_macro|| = 0``).
     """
+    E_macro = _to_array(E_macro)
+    _, norm, _ = _operators(Gamma_0)
 
-    # ------------------------------------------------------------------
-    # Helper functions
-    # ------------------------------------------------------------------
-    def C0_inner_product(X, Y):
-        return jnp.sum(
-            jnp.einsum("...ij,...ij->...", jnp.conjugate(X), Gamma_0.apply_C0(Y))
-        )
-        # return jnp.sum(jnp.einsum("...ij,...kl,ijkl", jnp.conjugate(X), Y, C0))
+    E_ref = norm(E_macro)
+    floor = jnp.maximum(1e-30, 1e-14 * E_ref)
 
-    def ref_norm(X):
-        return jnp.sqrt(jnp.real(C0_inner_product(X, X)))
+    history = {"Delta": jnp.zeros((max_iter,))}
 
-    def projection_on_D(X):
-        return Gamma_0.mv(Gamma_0.apply_C0(X))
-
-    # ------------------------------------------------------------------
-    # Initialisation
-    # ------------------------------------------------------------------
-    X = jnp.asarray(E_macro)
-    eps_aux = jnp.zeros_like(E_macro)
-    lam = 0.0
-
-    # E_norm = ref_norm(E_macro)
-
-    convergence_history = {
-        # "residual": jnp.zeros((max_iter,)),
-        "Delta": jnp.zeros((max_iter,)),
-        "lambda": jnp.zeros((max_iter,)),
-        "energy": jnp.zeros((max_iter,)),
-    }
-
-    # ------------------------------------------------------------------
-    # Loop
-    # ------------------------------------------------------------------
-    def cond_fun(state):
-        i, _, _, _, Delta, _ = state
-        return jnp.logical_and(i < max_iter, Delta >= tol)
-
-    def body_fun(state):
-        i, X, eps_aux, _, _, convergence_history = state
-
-        # Cached quantities
-        eps = alpha(eps_aux)
-        Delta = ref_norm(X) / ref_norm(E_macro - eps)
-
-        # AEM update
-        Z = alpha(X) + 2.0 * projection_on_D(X - alpha(X))
-
-        lam_new = C0_inner_product(X, Z) / C0_inner_product(Z, Z)
-
-        eps_aux_new = eps_aux + lam_new * X
-        sig = Gamma_0.apply_C0(2.0 * eps_aux_new - eps)
-        X = X - lam_new * Z
-
-        # convergence_history["residual"] = (
-        #     convergence_history["residual"].at[i].set(ref_norm(X) / E_norm)
-        # )
-        convergence_history["Delta"] = convergence_history["Delta"].at[i].set(Delta)
-        convergence_history["lambda"] = convergence_history["lambda"].at[i].set(lam_new)
-        convergence_history["energy"] = (
-            convergence_history["energy"]
-            .at[i]
-            .set(0.5 * jnp.mean(jnp.einsum("...ij,...ij->...", sig, eps)))
-        )
-        if verbose:
-            jax.debug.print(
-                "Iteration {} ||X|| = {:.5e} Delta = {:.5e} ||sig|| = {:.5e} lambda = {:.5e}",
-                i,
-                ref_norm(X) / ref_norm(E_macro),
-                Delta,
-                jnp.mean(jnp.linalg.matrix_norm(sig)),
-                lam_new,
-            )
-        return i + 1, X, eps_aux_new, lam_new, Delta, convergence_history
-
-    # ------------------------------------------------------------------
-    # Run
-    # ------------------------------------------------------------------
-    init_state = (0, X, eps_aux, lam, jnp.inf, convergence_history)
-    i_final, _, eps_aux_f, _, _, convergence_history = jax.lax.while_loop(
-        cond_fun, body_fun, init_state
-    )
-
-    # ------------------------------------------------------------------
-    # Final fields
-    # ------------------------------------------------------------------
-    eps = alpha(eps_aux_f)
-    sigma = Gamma_0.apply_C0(2.0 * eps_aux_f - eps)
-
-    convergence_history["iterations"] = i_final
-
-    return eps, sigma, convergence_history
-
-
-def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=True):
-    """
-    Moulinec and Suquet's solver
-    """
-
-    # ----------------
-    # Helper functions
-    # ----------------
-    def C0_inner_product(X, Y):
-        return jnp.sum(
-            jnp.einsum("...ij,...ij->...", jnp.conjugate(X), Gamma_0.apply_C0(Y))
-        )
-        # return jnp.sum(jnp.einsum("...ij,...kl,ijkl", jnp.conjugate(X), Y, C0))
-
-    def ref_norm(X):
-        return jnp.sqrt(jnp.real(C0_inner_product(X, X)))
-
-    def projection_on_D(X):
-        return Gamma_0.mv(Gamma_0.apply_C0(X))
-
-    # ------------------------------------------------------------------
-    # Initialisation
-    # ------------------------------------------------------------------
-    X = E_macro
-    eps = jnp.zeros_like(E_macro)
-
-    convergence_history = {
-        # "residual": jnp.zeros((max_iter,)),
-        "Delta": jnp.zeros((max_iter,)),
-        "energy": jnp.zeros((max_iter,)),
-    }
-
-    # ------------------------------------------------------------------
-    # Loop
-    # ------------------------------------------------------------------
-    def cond_fun(state):
+    def cond(state):
         i, _, Delta, _, _ = state
-        return jnp.logical_and(i < max_iter, Delta >= tol)
+        return jnp.logical_and(i < max_iter, Delta > tol)
 
-    def body_fun(state):
-        i, X, Delta, eps, convergence_history = state
-        tau = C_eps(eps) - C_eps_0(eps)
+    def body(state):
+        i, X, Delta, eps, hist = state
+
+        tau = _to_array(C_eps(eps)) - _to_array(C_eps_0(eps))
         X = E_macro - eps - Gamma_0.mv(tau)
-        Delta = ref_norm(X) / ref_norm(E_macro)
+        Delta = _safe_div(norm(X), jnp.maximum(E_ref, floor))
         eps = eps + X
-        sig = C_eps(eps)
 
-        # convergence_history["residual"] = (
-        #     convergence_history["residual"].at[i].set(ref_norm(X) / E_norm)
-        # )
-        convergence_history["Delta"] = convergence_history["Delta"].at[i].set(Delta)
-        convergence_history["energy"] = (
-            convergence_history["energy"]
-            .at[i]
-            .set(0.5 * jnp.mean(jnp.einsum("...ij,...ij->...", sig, eps)))
-        )
+        hist = {"Delta": hist["Delta"].at[i].set(Delta)}
         if verbose:
-            jax.debug.print(
-                "Iteration {}  Delta = {:.5e} ||sig|| = {:.5e}",
-                i,
-                Delta,
-                jnp.mean(jnp.linalg.matrix_norm(sig)),
-            )
-        return i + 1, X, Delta, eps, convergence_history
+            jax.debug.print("MS it {} Delta={:.5e}", i, Delta)
+        return i + 1, X, Delta, eps, hist
 
-    # ------------------------------------------------------------------
-    # Run
-    # ------------------------------------------------------------------
-    init_state = (0, X, jnp.inf, eps, convergence_history)
-    i_final, _, _, eps, convergence_history = jax.lax.while_loop(
-        cond_fun, body_fun, init_state
-    )
+    init = (0, E_macro, jnp.inf, jnp.zeros_like(E_macro), history)
+    i_f, _, Delta_f, eps, history = jax.lax.while_loop(cond, body, init)
 
-    # ------------------------------------------------------------------
-    # Final fields
-    # ------------------------------------------------------------------
-    sig = C_eps(eps)
-    eps = eps.tensor.reshape((-1, 3, 3))
-    sig = sig.tensor.reshape((-1, 3, 3))
-
-    convergence_history["iterations"] = i_final
-
-    return eps, sig, convergence_history
+    sigma = _to_array(C_eps(eps))
+    info = {
+        "num_steps": i_f,
+        "iterations": i_f,  # backward-compatible alias
+        "Delta_final": Delta_f,
+        "history": history,
+    }
+    return eps, sigma, info
