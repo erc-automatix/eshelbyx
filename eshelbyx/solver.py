@@ -349,6 +349,9 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 100
     def projector_damage(d, d_old):
         return jnp.clip(d, d_old, 1.0)
     
+    def laplacianFFT(X):
+        return Gamma_0.laplacian(X)
+    
     
     # ------------------------------------------------------------------
     # Initialisation
@@ -375,10 +378,13 @@ def damage_Feugueur_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 100
         #d_new = OperatorFFT(xi)
         
         xi_new = B - ((A-A0)*d_new)
-        err = norm2(xi_new-xi)/norm2(xi_new)
         
-        # New error
-        #err = norm2(d_new - OperatorFFT(xi_new))
+        
+        # -------------
+        # Error
+        # -------------
+        #err = norm2(xi_new-xi)/norm2(xi_new)
+        err = norm2(A*d_new-laplacianFFT(d_new)-B)/jnp.maximum(norm2(A*d_new),1e-12)
         
         
         
@@ -429,6 +435,9 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 1000, t
     def projector_damage(d,d_old):
         return jnp.clip(d, d_old, 1.0)
     
+    def laplacianFFT(X,Gamma_0):
+        return Gamma_0.laplacian(X)
+    
     
     
     # ------------------------------------------------------------------
@@ -461,18 +470,93 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 1000, t
         lmbda = jnp.sum(X*Z)/jnp.sum(Z**2)
         d_aux_new = d_aux + lmbda*X
         
-        # New reference medium
-        #A0_new = norm2(B-((2-alpha)*A0*d_aux_new))/norm2(alpha*d_aux_new)
+        
+        
+        
+        # -----------------------------------------
+        # New A0
+        # -----------------------------------------
+        
+        
+        """
+        # ----------------
+        # Same prescribed A0
+        # --------------------
+        A0_new = A0
+        """
+        
+        
+        """
+        # --------------------------
+        # Method without gradients
+        # --------------------------
         A0_new = norm2(B-((2-alpha)*A0*d_aux_new))/norm2(alpha*d_aux_new)
-        #A0_new = A0
         k0 = A0_new/A0
         alpha_new = 2*A0_new/(A+A0_new) 
         d_aux_new = (2*d_aux_new) / ( ((2-alpha_new)*k0) +alpha_new)
+        """
         
-        # Error
+        
+        
+        
+        # ---------------------
+        # eps_hat tq sig SA
+        # ---------------------
+        
+        #A0_new = jnp.sqrt((-A0*jnp.mean(OperatorFFT(B, Gamma_0(A0))*B) + jnp.mean(A**2*d_new**2))/jnp.maximum(jnp.mean(d_new**2),1e-12))
+        
+        #A0_new = (jnp.mean(A**2*d_new**2) - (A0**2)*jnp.mean(d_new**2))/jnp.maximum(jnp.mean(OperatorFFT(B, Gamma_0(A0))*B),1e-12)
+        
+        a = jnp.mean((alpha*d_aux_new)**2)
+        b = jnp.mean(B*OperatorFFT(B, Gamma_0(A0)))
+        c = -jnp.mean((A0*(2-alpha)*d_aux_new)**2)
+        delta = b**2 - 4*a*c
+        A0_new = (-b+jnp.sqrt(delta))/(2*a)
+        
+        
+        
+        """
+        # eps_hat CA
+        
+        B_n = A0*OperatorFFT(B, Gamma_0(A0))-B
+        
+        #A0_new = jnp.sqrt((jnp.mean(B_n*(B-2*A*d_new) + (B-A*d_new)**2) + 2*A0*jnp.mean(B_n*d_new)) / jnp.maximum(jnp.mean(d_new**2),1e-12))
+        
+        #A0_new = ((A0**2)*jnp.mean(d_new**2) - jnp.mean(B_n*(B-(2*A*d_new)) + (B-A*d_new)**2)) / jnp.maximum((2*jnp.mean(B_n*d_new)),1e-12)
+        
+        
+        a = jnp.mean(d_new**2)
+        b = -2*jnp.mean(B_n*d_new)
+        c = -jnp.mean(B_n*(B-(2*A*d_new)) + (B-A*d_new)**2)
+        delta = b**2 - 4*a*c
+        A0_new = (-b+jnp.sqrt(delta))/(2*a)
+        """
+        
+        
+        
+        # ----------------------
+        # Update of d_aux_new
+        # ----------------------
+        k0 = A0_new/A0
+        alpha_new = 2*A0_new/(A+A0_new) 
+        d_aux_new = (2*d_aux_new) / ( ((2-alpha_new)*k0) + alpha_new)
+        
+
+        
+        # ----------------------------
+        # Projection on [d_old,1]
+        # ----------------------------
         d_new = projector_damage(alpha_new*d_aux_new,d_old)
-        xi_new = B - ((A-A0_new)*d_new)
-        err = norm2(d_new - OperatorFFT(xi_new, Gamma_0(A0_new)))
+        d_aux_new = d_new / alpha_new
+        
+        
+        
+        # -------------------
+        # Error
+        # ----------------------
+        sig_new = (A0*(2-alpha_new)*d_aux_new)
+        err = norm2(sig_new-laplacianFFT(alpha_new*d_aux_new, Gamma_0(A0_new))-B)/jnp.maximum(norm2(sig_new),1e-12)
+        
 
         convergence_history["err"] = convergence_history["err"].at[i].set(err)
         if verbose:
@@ -485,7 +569,6 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 1000, t
             )
             
             
-        d_aux_new = d_new/alpha_new
         
         return i + 1, d_aux_new, lmbda, err, convergence_history, A0_new
     
@@ -509,7 +592,7 @@ def damage_EAEM_solver(damage_init, A, B, A0, Gamma_0, d_old, max_iter = 1000, t
 
 
 
-def AEM_expansionSolver(eps_load, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
+def AEM_expansionSolver(sigma_load, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=True):
     """
     Adaptive Eyre–Milton (AEM) solver – minimal version
 
@@ -540,12 +623,17 @@ def AEM_expansionSolver(eps_load, alpha, Gamma_0, max_iter=1000, tol=1e-10, verb
         X_mean = jnp.mean(X, axis=spatial_axes)
         X_mean_field = jnp.broadcast_to(X_mean, X.shape)
         return X_mean_field
+    
+    
+    def apply_C0_inv(eps):
+        return Gamma_0.apply_C0_inv(eps)
 
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
-    X = mean_field(eps_load) - eps_load + projection_on_D(eps_load)
-    eps_aux = jnp.zeros_like(eps_load)
+    #X = mean_field(eps_load) - eps_load + projection_on_D(eps_load) 
+    X = apply_C0_inv(mean_field(sigma_load)) + projection_on_D(apply_C0_inv(sigma_load))
+    eps_aux = jnp.zeros_like(sigma_load)
     lam = 0.0
 
 
@@ -567,8 +655,9 @@ def AEM_expansionSolver(eps_load, alpha, Gamma_0, max_iter=1000, tol=1e-10, verb
         i, X, eps_aux, _, _, convergence_history = state
 
         # Cached quantities
-        eps = alpha(eps_aux) + eps_load
-        Delta = ref_norm(X) / ref_norm(2*mean_field(alpha(eps_aux)-eps_aux) + mean_field(eps_load) - eps)
+        eps = alpha(eps_aux) #+ eps_load
+        #Delta = ref_norm(X) / ref_norm(2*mean_field(alpha(eps_aux)-eps_aux) + mean_field(eps_load) - eps)
+        Delta = ref_norm(X) / ref_norm(2*mean_field(alpha(eps_aux)-eps_aux) + apply_C0_inv(mean_field(sigma_load)) - eps)
 
         # AEM update
         Z = alpha(X) + 2.0 * projection_on_D(X - alpha(X)) + 2*mean_field(X-alpha(X))
@@ -576,7 +665,8 @@ def AEM_expansionSolver(eps_load, alpha, Gamma_0, max_iter=1000, tol=1e-10, verb
         lam_new = C0_inner_product(X, Z) / C0_inner_product(Z, Z)
 
         eps_aux_new = eps_aux + lam_new * X
-        sig = Gamma_0.apply_C0(2*eps_aux_new-alpha(eps_aux_new))
+        sig = Gamma_0.apply_C0(2*eps_aux_new-alpha(eps_aux_new))-sigma_load
+        #sig = Gamma_0.apply_C0(2*eps_aux_new-alpha(eps_aux_new))-sigma_load
         X = X - lam_new * Z
 
         # convergence_history["residual"] = (
@@ -593,7 +683,7 @@ def AEM_expansionSolver(eps_load, alpha, Gamma_0, max_iter=1000, tol=1e-10, verb
             jax.debug.print(
                 "Iteration {} ||X|| = {:.5e} Delta = {:.5e} ||sig|| = {:.5e} lambda = {:.5e}",
                 i,
-                ref_norm(X) / ref_norm(eps_load),
+                ref_norm(X) / ref_norm(sigma_load),
                 Delta,
                 jnp.mean(jnp.linalg.matrix_norm(sig)),
                 lam_new,
@@ -611,8 +701,8 @@ def AEM_expansionSolver(eps_load, alpha, Gamma_0, max_iter=1000, tol=1e-10, verb
     # ------------------------------------------------------------------
     # Final fields
     # ------------------------------------------------------------------
-    eps = alpha(eps_aux_f) + eps_load
-    sigma = Gamma_0.apply_C0(2.0 * eps_aux_f - alpha(eps_aux_f))
+    eps = alpha(eps_aux_f) 
+    sigma = Gamma_0.apply_C0(2.0 * eps_aux_f - alpha(eps_aux_f)) - sigma_load
 
     convergence_history["iterations"] = i_final
 
