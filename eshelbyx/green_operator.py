@@ -152,6 +152,10 @@ class DamageFeugueurGreenOperator(lx.AbstractLinearOperator):
         self.A0 = A0
     
     
+    # ----------------------
+    # Green operator Q0
+    # ----------------------
+    
     @partial(jax.remat, prevent_cse=False)
     def _Gamma_0_func_impl(self, X):
         
@@ -177,7 +181,31 @@ class DamageFeugueurGreenOperator(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def mv(self, vector, out=None):
         return self.Gamma_0_func(vector)
-
+    
+    
+    # ------------------------
+    # Laplacian computation
+    # ------------------------
+    @partial(jax.remat, prevent_cse=False)
+    def _laplacian_impl(self, X):
+    
+        with jax.named_scope("laplacian/fft"):
+            X_hat = jnp.fft.fftn(X)
+    
+        with jax.named_scope("laplacian/symbol"):
+            L_hat = self.discretization.apply_laplacian(1.0)
+    
+        with jax.named_scope("laplacian/apply"):
+            Y_hat = L_hat * X_hat
+    
+        with jax.named_scope("laplacian/ifft"):
+            return jnp.fft.ifftn(Y_hat).real
+    
+    
+    def laplacian(self, X):
+        return self._laplacian_impl(X)
+    
+    
 
     def as_matrix(self):
         raise NotImplementedError("Matrix-free operator")
