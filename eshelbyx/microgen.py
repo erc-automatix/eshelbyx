@@ -88,7 +88,7 @@ def make_grid(bounds, dims):
 
 def main_3_phases():
     """
-    Voxelized geometry of a matrix cube with a circular pore in the center, 8 inclusions in the corners
+    Voxelized 3D-geometry of a matrix cube with a circular pore in the center, 8 inclusions in the corners
     (without hybrid voxels).
     """
 
@@ -170,7 +170,7 @@ def main_3_phases():
 
 def main_Hashin_an():
     """
-    Analytical solution for the Hashin's coated sphere
+    Analytical solution for the Hashin's coated sphere in 3D
     """
     N = 64
     Nloc = 5
@@ -397,10 +397,10 @@ def main_Hashin_an():
 
 def main_Hashin_num():
     """
-    Voxelized geometry of the Hashin's coated sphere problem for future numerical computation
+    Voxelized 3D-geometry of the Hashin's coated sphere problem for future numerical computation
     """
 
-    N = 25  # Number of voxels in each direction
+    N = 32  # Number of voxels in each direction
     Rint = 0.2
     Rext = 0.4
     coating_thickness = Rext - Rint
@@ -656,7 +656,7 @@ def test_laminate_box():
     bounds_hybrid = (-tol, tol, -0.5, 0.5, -0.5, 0.5)
     grid = make_grid(bounds, (N + 1, N + 1, N + 1))
 
-    # Premier pavé (en bas sur X)
+
     box = pv.Box(bounds=bounds)
     box_hybrid = pv.Box(bounds=bounds_hybrid)
     inside_box = voxelize_on_grid(box, grid)
@@ -725,14 +725,16 @@ def test_laminate_box():
     return grid, phase
 
 
-def main_multigrid_single_voxel():
+
+def main_multigrid():
     """
     Voxelized box with all phases = 0 except center voxel with phase = 1
     """
 
-    N = 3
-    bounds = (-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)
-    grid = make_grid(bounds, (N + 1, N + 1, N + 1))
+    N = 16
+    bounds = (-0.5, 0.5, -0.5, 0.5, -0.5/N, 0.5/N)
+    grid = make_grid(bounds, (N + 1, N + 1, 2))
+    
 
     box = pv.Box(bounds=bounds)
     inside_box = voxelize_on_grid(box, grid)
@@ -744,11 +746,13 @@ def main_multigrid_single_voxel():
 
     centers = grid.cell_centers().points
 
-    dist = np.linalg.norm(centers, axis=1)
-    idx_center = np.argmin(dist)
-
     phase = np.zeros(centers.shape[0], dtype=np.uint8)
-    phase[idx_center] = 1
+    
+    idx_plus = np.argmin(np.sum((centers - np.array([1e-12, 1e-12, 1e-12]))**2, axis=1))
+    idx_minus = np.argmin(np.sum((centers - np.array([-1e-12, -1e-12, -1e-12]))**2, axis=1))
+    
+    phase[idx_plus] = 1
+    phase[idx_minus] = 2
 
     grid.cell_data["phase"] = phase.flatten(order="F")
 
@@ -760,7 +764,7 @@ def main_multigrid_single_voxel():
 
 def damage_num_sin():
     """
-    Voxelized geometry for the AT2 damage model with the sinusoidal analytical damage field
+    Voxelized 3D-geometry for the damage model with the sinusoidal analytical damage field
     """
     
     N = 64  # Number of voxels per direction
@@ -800,7 +804,7 @@ def damage_num_sin():
   
 def damage_num_2phases():
     """
-    Voxelized geometry for the AT2 damage model : spherical inclusion within a cubic matrix
+    Voxelized 3D-geometry for the damage model : spherical inclusion within a cubic matrix
     """
 
     N = 64
@@ -865,10 +869,10 @@ def damage_num_2phases():
 
 def expansion_num_2phases():
     """
-    Voxelized geometry for expansion : spherical inclusion within a cubic matrix
+    Voxelized 3D-geometry for expansion : spherical inclusion within a cubic matrix
     """
 
-    N = 16
+    N = 25
     L = 1
     radius = L/4
 
@@ -1043,41 +1047,13 @@ def expansion_num_2phases():
 
 
 
-def elasticity_static_damage():
-    """
-    Voxelized geometry for the AT2 damage model with an exponential damage field in the center of a box
-    """
-    
-    N = 65  # Number of voxels per direction
-    bounds = (-0.5, 0.5, -0.5, 0.5, -0.5/N, 0.5/N)
-    grid = make_grid(bounds, (N + 1, N + 1, 2))
-    
-    # Voxels centers coordinates
-    L = (bounds[1] - bounds[0]) # Length of the domain
-    dx = L / N
-    l0 = 5*dx
-    xc = bounds[0] + (np.arange(N) + 0.5) * dx
-    yc = bounds[2] + (np.arange(N) + 0.5) * dx
-    zc = bounds[4] + (np.arange(1) + 0.5) * dx
-    Xc, Yc, Zc = np.meshgrid(xc, yc, zc, indexing='ij') # Coordinates of the voxels centers
-    
-    
-    # Analytical damage
-    damage = np.zeros((N, N, 1), dtype=np.float64)
-    damage = jnp.exp(-jnp.abs(Yc/l0))  # exponential
-    grid.cell_data["damage"] = damage.flatten(order="F")
-    
-    # Phase labeling
-    phase = np.zeros_like(damage, dtype=np.uint8)
-    grid.cell_data["phase"] = phase.flatten()
-    
-    grid.save(f"results/elasticity_static_damage_{N}.vti") 
+
     
     
 
 def elasticity_evolving_damage():
     """
-    Voxelized geometry of a box with initial damage field = 0
+    Voxelized 2D-geometry of a box with pre-crack at the center
     """
     
     Lx = 1.0
@@ -1114,11 +1090,6 @@ def elasticity_evolving_damage():
     damage_init[bool_pre_damage] = 0.0
     grid.cell_data["damage_init"] = damage_init.flatten(order="F")
     
-    
-    # Small perturbation
-    perturbation = np.ones((Nx, Ny, 1), dtype=np.float64)
-    perturbation[bool_pre_damage] = 1e-6
-    grid.cell_data["perturbation"] = perturbation.flatten(order="F")
     
     
     # Phase labeling
@@ -1222,7 +1193,8 @@ def expansion_num_2phases_2D():
     # -------------------------------------------------
 
     damage_init = np.zeros((N, N), dtype=np.float64)
-
+    
+    
     # -------------------------------------------------
     # PyVista grid
     # -------------------------------------------------
@@ -1242,6 +1214,7 @@ def expansion_num_2phases_2D():
     grid.cell_data["damage_init"] = damage_init.flatten(order="F")
 
     grid.cell_data["phases_couple"] = phases_couple.reshape((-1, 2),order="F")
+    
 
     # -------------------------------------------------
     # Visualization
@@ -1462,11 +1435,7 @@ def homogenization_shear_2D():
     phases_couple[r_SO < radius] = (3, 0)
     phases_couple[r_SE < radius] = (4, 0)
 
-    # -------------------------------------------------
-    # Initial damage
-    # -------------------------------------------------
 
-    damage_init = np.zeros((N, N), dtype=np.float64)
 
     # -------------------------------------------------
     # PyVista grid
@@ -1484,8 +1453,6 @@ def homogenization_shear_2D():
 
     grid.cell_data["volumic_fraction"] = volumic_fraction.flatten(order="F")
 
-    grid.cell_data["damage_init"] = damage_init.flatten(order="F")
-
     grid.cell_data["phases_couple"] = phases_couple.reshape((-1, 2),order="F")
 
 
@@ -1501,13 +1468,13 @@ def homogenization_shear_2D():
 
 #main_3_phases()
 #main_Hashin_an()
-#main_Hashin_num()
-#main_multigrid_single_voxel()
+main_Hashin_num()
+#main_multigrid()
 #test_laminate_box()
 #damage_num_sin()
 #damage_num_2phases()
 #expansion_num_2phases()
 #elasticity_static_damage()
-elasticity_evolving_damage()
+#elasticity_evolving_damage()
 #expansion_num_2phases_2D()
 #homogenization_shear_2D()

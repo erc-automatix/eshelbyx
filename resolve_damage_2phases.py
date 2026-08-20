@@ -11,6 +11,10 @@ jax.config.update("jax_platform_name", "cpu")
 import jax.numpy as jnp
 import equinox as eqx
 
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
+
+
 from eshelbyx.green_operator import (
     DamageFeugueurGreenOperator,
     DamageNaiveGreenOperator,
@@ -77,10 +81,8 @@ elif solver_used == damage_EAEM_solver:
 
 
 
-A0 = (jnp.max(A)+jnp.min(A))/2
-#A0=100
-
-
+# Initial A0
+A0 = 1e12
     
 
 
@@ -91,12 +93,16 @@ damage_init = jnp.array(damage_init_data).reshape(grid.shape,order="F")
 
 
 
-# Damage Green Operator : function of A0
+# Damage Green Operator : function of A0 (for EAEM because A0 evolves)
 @eqx.filter_jit
 def Gamma_0_func(A0):
     return DamageFeugueurGreenOperator(grid=grid, discretization=discretization_used(grid), A0 = A0)
 
 Gamma_0 = lambda A0: Gamma_0_func(A0)
+
+
+# Array to save the A0 evolution (here of size 20)
+les_A0_save = jnp.zeros(20)
 
 
 
@@ -113,15 +119,10 @@ if solver_used == damage_Feugueur_solver:
 
 
 elif solver_used == damage_EAEM_solver:
-    
-    
-    # Green operator
-    #Gamma_0 = DamageFeugueurGreenOperator(grid=grid, discretization=discretization_used(grid), A0 = A0)
-    
     # Solver
     for solver in [damage_EAEM_solver]:
         tic = time()
-        d, it_max_damage, delta_damage = solver(damage_init, A, B, A0, Gamma_0, damage_init, max_iter = 1000, tol=1e-6, verbose=True)
+        d, it_max_damage, delta_damage, A0_new, les_A0_save = solver(damage_init, A, B, A0, Gamma_0, damage_init, les_A0_save, max_iter = 1000, tol=1e-6, verbose=True)
         print(f"{solver.__name__} solver time", time() - tic)
         print("\n")
         
@@ -133,11 +134,38 @@ pv_grid.save(file_name.removesuffix(".vti") + "_results.vtk")
 
 
 
+# ----------------------------------
+# Plot evolution A0
+# -----------------------------------
+les_A0_save = jnp.concatenate((jnp.array([1e12]), les_A0_save))
+les_it = jnp.array([it for it in range(0,jnp.size(les_A0_save))])
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.plot(les_it, les_A0_save, "-x")
+ax.set_xlabel("Iteration")
+ax.set_ylabel(r"$A_0$")
+ax.set_yscale("log")
+ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+ax.grid(True, which="both", linestyle="--", alpha=0.7)
+ax.axhline(
+    A0_new,
+    color="black",
+    linestyle="--",
+    label=r"$A_0^{EA2EM}$"
+)
+plt.legend()
+plt.savefig("evolution_A0_1e4.pdf")
+plt.show()
+
+
+
+
 
 """
 # ------------------------
 # Verifications
 # ------------------------
+A0_opt_EAEM = 50
+
 
 
 # FFT operator : X/(A0 + ξ.ξ)
@@ -149,9 +177,9 @@ def norm2(X):
     return jnp.sqrt(jnp.sum(X**2))
 
 
+les_A0 = jnp.array([1,5,10,20,30,40,50,58,70,80,90,100])
 
 
-les_A0 = jnp.array([600,800,1000,1200,1400,1600,1800,2000])
 
 def func_test(A0,d):
     Gamma_0 = DamageFeugueurGreenOperator(grid=grid, discretization=discretization_used(grid), A0 = A0)
@@ -161,35 +189,35 @@ def func_test(A0,d):
 
 
 les_err = [func_test(A0,d) for A0 in les_A0]
-import matplotlib.pyplot as plt
-plt.plot(les_A0,les_err)
-plt.xlabel("A0")
-plt.ylabel("err")
-plt.grid(True)
+
+fig, ax = plt.subplots(figsize=(6, 4))
+
+ax.plot(
+    les_A0,
+    les_err,
+    "-o"
+)
+
+ax.set_xlabel(r"$A_0$")
+ax.set_ylabel(r"$e_{A_0}$")
+
+# Ligne verticale
+ax.axvline(
+    A0_opt_EAEM,
+    color="black",
+    linestyle="--",
+    label=r"$A_0^{EA2EM}$"
+)
+
+# Légende
+ax.legend(
+)
+
+ax.grid(True)
+
+plt.savefig("err_EAEM_1e4.pdf", format="pdf", bbox_inches="tight")
 plt.show()
 """
 
-
-"""
-import matplotlib.pyplot as plt
-import jax.numpy as jnp
-
-les_A0 = jnp.array([10,50,75,100,200,300,400,500,600,700,800,900,1000,5000])
-les_niter = jnp.array([1474,269,166,136,75,76,72,116,148,184,214,258,278,1068])
-
-plt.figure(figsize=(6, 4))
-
-plt.plot(les_A0, les_niter, "x-", label=r"$n_{\mathrm{iter}}$")
-plt.axvline(1160, color="red", linestyle="--", label=r"$A_0^{\mathrm{algo}}$")
-plt.xscale("log")
-
-plt.grid(True)
-plt.legend()
-plt.xlabel(r"$A_0$")
-plt.ylabel(r"$n_{\mathrm{iter}}$")
-
-plt.tight_layout()
-plt.show()
-"""
 
 
