@@ -281,3 +281,111 @@ def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=
         "history": history,
     }
     return eps, sigma, info
+
+
+@eqx.filter_jit
+def DRSolver_(
+    E_macro,
+    alpha,
+    Gamma_0,
+    max_iter=2000,
+    tol=1e-10,
+    theta=1.0,
+    z0_scale=2.0,
+    verbose=False,
+):
+    """Douglas--Rachford solver.
+
+    Parameters
+    ----------
+    alpha : the AEM resolvent (alpha(w) solves sigma(e)+C0:e = 2 C0:w);
+            DR uses J_B(z) = alpha(z/2).
+    theta : relaxation in (0, 2]; theta=1 is standard DR, theta>1 over-relaxes.
+    z0_scale : initial z = z0_scale * E_macro. The natural polarisation guess
+            (eps=E, sigma=C0:E) is z0_scale=2 and makes a homogeneous medium
+            converge in one step.
+
+    Returns eps, sigma (grid arrays) and info with ``num_steps``/``Delta_final``.
+    """
+    E_macro = _to_array(E_macro)
+    inner, norm, project = _operators(Gamma_0)
+    Enorm = norm(E_macro) + 1e-300
+
+    def cond(state):
+        k, z, delta = state
+        return jnp.logical_and(k < max_iter, delta > tol)
+
+    def body(state):
+        k, z, _ = state
+        e = alpha(z / 2.0)  # J_B(z)
+        gap = (E_macro + project(2.0 * e - z)) - e  # J_A(R_B z) - J_B z
+        z_new = z + theta * gap
+        delta = norm(gap) / Enorm  # DR feasibility residual
+        if verbose:
+            jax.debug.print("DR it {} Delta={:.5e}", k, delta)
+        return k + 1, z_new, delta
+
+    z0 = z0_scale * E_macro
+    k, z, delta = jax.lax.while_loop(cond, body, (0, z0, jnp.inf))
+
+    eps = alpha(z / 2.0)
+    sigma = Gamma_0.apply_C0(z - eps)  # sigma = C0:(z - e)
+    return eps, sigma, {"num_steps": k, "Delta_final": delta}
+
+
+@eqx.filter_jit
+def DRSolver(
+    E_macro,
+    alpha,
+    Gamma_0,
+    scale_init=1.0,
+    max_iter=4000,
+    tol=1e-10,
+    theta=1.99,
+    z0_scale=2.0,
+    scale_update=True,
+    scale_clip=(1e-8, 1e8),
+    verbose=False,
+):
+    """Douglas-Rachford with adaptive reference medium.
+
+    z = e + (scale*C0)^{-1} sigma. Per iteration:
+      1. e = J_B(z; scale) = alpha(z/2, scale)
+      2. (optional) s_new = scale * <z-e, e>_C0 / <e, e>_C0  ; transport
+         z <- e + (scale/s_new)(z - e)   [keeps e = J_B(z; s_new) invariant]
+      3. DR step:  z <- z + theta*( [E + P(2e - z)] - e ) ,  P = Gamma0 C0
+    Recover eps = J_B(z; scale), sigma = scale*C0:(z - eps).
+    """
+    E_macro = _to_array(E_macro)
+    inner, norm, project = _operators(Gamma_0)
+    Enorm = norm(E_macro) + 1e-300
+    floor = 1e-14 * Enorm
+
+    def cond(state):
+        k, z, scale, delta = state
+        return jnp.logical_and(k < max_iter, delta > tol)
+
+    def body(state):
+        k, z, scale, _ = state
+        e = alpha(z / 2.0, scale)  # J_B(z; scale)
+
+        if scale_update:
+            fluct = norm(E_macro - e)
+            stress = scale * norm(z - e)  # ||sigma||_{C0^-1}
+            s_new = jnp.where(fluct > floor, _safe_div(stress, fluct), scale)
+            s_new = jnp.clip(s_new, scale_clip[0], scale_clip[1])
+            z = e + (scale / s_new) * (z - e)  # transport (e invariant)
+            scale = s_new
+
+        gap = (E_macro + project(2.0 * e - z)) - e  # DR gap at current scale
+        z_new = z + theta * gap
+        delta = norm(gap) / Enorm
+        if verbose:
+            jax.debug.print("DR it {} d={:.3e} scale={:.4e}", k, delta, scale)
+        return k + 1, z_new, scale, delta
+
+    z0 = z0_scale * E_macro
+    k, z, scale, delta = jax.lax.while_loop(cond, body, (0, z0, scale_init, jnp.inf))
+    eps = alpha(z / 2.0, scale)
+    sigma = scale * Gamma_0.apply_C0(z - eps)
+    return eps, sigma, {"num_steps": k, "Delta_final": delta, "scale_final": scale}
