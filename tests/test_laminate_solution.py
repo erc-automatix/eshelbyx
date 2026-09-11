@@ -129,6 +129,7 @@ def test_laminate(contrast, solver, grid_size, discretization):
             eps, sig, info = solver(E_macro, alpha, Gamma_0, tol=1e-10, max_iter=200)
         sig_mean_num = jnp.mean(sig, axis=[0, 1, 2])
 
+        print(sig[..., 0, 1])
         return sig_mean_num
 
     # -----------------------------------------------------------------
