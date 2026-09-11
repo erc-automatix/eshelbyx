@@ -1,29 +1,53 @@
 [project]
 name = "eshelbyx"
-version = "0.0.1"
-description = "Homogenization of heterogeneous materials in JAX"
+version = "0.1.0"
+description = "FFT-based computational homogenization of heterogeneous materials in JAX"
 readme = "README.md"
 authors = [
     { name = "Jeremy Bleyer", email = "jeremy.bleyer@enpc.fr" },
-    {name = "Martin Dolbeau", email = "martin.dolbeau@ensam.fr"},
-    {name = "Samuel Guiton", email = "samuel.guiton@enpc.fr"}
+    { name = "Martin Dolbeau", email = "martin.dolbeau@ensam.fr" },
+    { name = "Samuel Guiton", email = "samuel.guiton@enpc.fr" }
 ]
-license = { text = "GNU LGPLv2.1" }  # Replace or remove if not using MIT
-keywords = ["material science", "material modeling", "solid mechanics", "homogenization", "FFT", "automatic differentiation"]
-requires-python = ">=3.10"
+license = { text = "LGPL-3.0" }
+keywords = ["material science", "homogenization", "FFT", "micromechanics", "solid mechanics", "automatic differentiation"]
+requires-python = ">=3.11"
 dependencies = [
-    "jaxmat>=0.0.3",
+    "jaxmat>=0.0.4",
     "jax>=0.6.1",
-    "equinox",
-    "diffrax",
-    "optimistix",
-    "lineax",
-    "pyvista"
+    "equinox>=0.11",
+    "optimistix>=0.1.0",
+    "lineax>=0.0.7",
+    "numpy",
 ]
 
+
+[project.urls]
+Homepage = "https://erc-automatix.github.io/eshelbyx/"
+Repository = "https://github.com/erc-automatix/eshelbyx"
+Documentation = "https://erc-automatix.github.io/eshelbyx/"
+
 [project.optional-dependencies]
+docs = [
+    "matplotlib>=3.8",
+    "jupytext",
+    "jupyter_book<2",
+    "sphinx_autodoc_typehints",
+    "sphinx_math_dollar"
+]
 gpu = [
     "jax[cuda12]>=0.6.1",
+]
+# PyVista is only needed for VTK input/output and plotting. The library imports
+# and solves without it; see eshelbyx.io.
+viz = [
+    "pyvista",
+]
+test = [
+    "matplotlib>=3.8",
+    "pytest>=8.0",
+    "scipy",
+    "pyvista",
+    "pre-commit"
 ]
 
 [build-system]
@@ -35,3 +59,23 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["eshelbyx*", "demos*", "tests*"]
+
+[tool.ruff]
+line-length = 100
+indent-width = 4
+
+[tool.ruff.lint]
+select = [
+#      "D",      # pydocstyle
+      "E",      # pycodestyle
+      "W",      # pycodestyle
+      "F",      # pyflakes
+      "I",      # isort - use standalone isort
+      "RUF",    # Ruff-specific rules
+      "UP",     # pyupgrade
+      "ICN",    # flake8-import-conventions
+      "NPY",    # numpy-specific rules
+      "FLY",    # use f-string not static joins
+      "NPY201", # numpy 2.x ruleset
+]

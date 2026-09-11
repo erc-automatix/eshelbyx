@@ -1,0 +1,43 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: eshelbyx
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Jeremy
+    family-names: Bleyer
+    email: jeremy.bleyer@enpc.fr
+    affiliation: 'Ecole Nationale des Ponts et Chaussées, IP Paris'
+    orcid: 'https://orcid.org/0000-0001-8212-9921'
+  - given-names: Martin
+    family-names: Dolbeau
+    email: martin.dolbeau@ensam.fr
+    affiliation: 'Arts et Métiers Sciences et Technologies'
+  - given-names: Samuel
+    family-names: Guiton
+    email: samuel.guiton@enpc.fr
+    affiliation: 'Ecole Nationale des Ponts et Chaussées, IP Paris'
+repository-code: 'https://github.com/erc-automatix/eshelbyx'
+url: 'https://erc-automatix.github.io/eshelbyx/'
+abstract: >-
+  eshelbyx is an open-source library for FFT-based
+  computational homogenization of heterogeneous materials.
+  It solves the periodic cell problem on voxel grids using
+  adaptive and accelerated Eyre-Milton iterative schemes,
+  which converge at arbitrary phase contrast including rigid
+  inclusions and voids. The library is implemented in JAX and
+  builds on jaxmat for constitutive modeling and tensor
+  algebra.
+keywords:
+  - material science
+  - homogenization
+  - FFT
+  - micromechanics
+  - solid mechanics
+  - automatic differentiation
+license: LGPL-3.0+
+version: 0.1.0
