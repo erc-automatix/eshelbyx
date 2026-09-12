@@ -23,11 +23,14 @@ class Grid(eqx.Module):
     >>> grid["E"]
     """
 
-    # Geometry
-    shape: tuple[int, ...]
-    size: tuple[float, ...]
-    origin: tuple[float, ...] = (0.0, 0.0, 0.0)
-    periodic: tuple[bool, ...] = (True, True, True)
+    # Geometry. These are static: they describe the shape of the problem, not
+    # data flowing through it. Left dynamic they become pytree leaves, so under
+    # jit the grid shape arrives as a tracer and any use of it as a Python int
+    # (array shapes, fft output sizes) fails.
+    shape: tuple[int, ...] = eqx.field(static=True)
+    size: tuple[float, ...] = eqx.field(static=True)
+    origin: tuple[float, ...] = eqx.field(static=True, default=(0.0, 0.0, 0.0))
+    periodic: tuple[bool, ...] = eqx.field(static=True, default=(True, True, True))
 
     # Data
     fields: dict[str, jax.Array]
@@ -58,10 +61,12 @@ class Grid(eqx.Module):
         **field_kwargs
             Additional fields given as keyword arguments.
         """
-        self.shape = shape
-        self.size = size
-        self.origin = origin
-        self.periodic = periodic if periodic else tuple([True] * len(shape))
+        # Static fields must be hashable, so normalise to tuples of Python
+        # scalars; callers routinely pass lists or numpy values.
+        self.shape = tuple(int(n) for n in shape)
+        self.size = tuple(float(L) for L in size)
+        self.origin = tuple(float(o) for o in origin)
+        self.periodic = tuple(bool(p) for p in periodic) if periodic else (True,) * len(self.shape)
         self.fields = {"markers": 0}
         self.fields.update(fields or {})
         self.metadata = {}
