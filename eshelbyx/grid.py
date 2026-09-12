@@ -1,60 +1,62 @@
+"""Regular voxel grid carrying geometry and per-cell fields."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-import equinox as eqx
-import pyvista as pv
-from typing import Tuple, Optional, Dict, Callable
+
+__all__ = ["Grid"]
 
 
 class Grid(eqx.Module):
-    """
-    Unified grid class with geometry, fields, materials, and PyVista integration.
+    """Regular Cartesian voxel grid with named cell fields.
 
-
-    Examples:
-        # Create from file with materials
-        grid = Grid.from_vti("file.vti", material_map={...})
-
-        # Create programmatically
-        grid = Grid.from_function(shape=(64,64,64), size=(1,1,1), marker_fn=fn)
-
-        # Access fields
-        E = grid.E  # or grid['E'] or grid.fields['E']
-
-        # PyVista
-        grid.plot(field='E')
-        grid.save('results.vti')
+    Examples
+    --------
+    >>> # doctest: +SKIP
+    >>> grid = Grid.from_function(shape=(32, 32, 32), marker_fn=sphere)
+    >>> grid = grid.apply_material_map({0: {"E": 1.0, "nu": 0.3}})
+    >>> grid["E"]
     """
 
     # Geometry
-    shape: Tuple[int, ...]
-    size: Tuple[float, ...]
-    origin: Tuple[float, ...] = (0.0, 0.0, 0.0)
-    periodic: Tuple[bool, ...] = (True, True, True)
+    shape: tuple[int, ...]
+    size: tuple[float, ...]
+    origin: tuple[float, ...] = (0.0, 0.0, 0.0)
+    periodic: tuple[bool, ...] = (True, True, True)
 
     # Data
-    fields: Dict[str, jax.Array]
-    metadata: Dict[str, any] = eqx.field(default_factory=dict, static=True)
+    fields: dict[str, jax.Array]
+    metadata: dict[str, any] = eqx.field(default_factory=dict, static=True)
 
     def __init__(
         self,
-        shape: Tuple[int, ...],
-        size: Tuple[float, ...] = (1.0, 1.0, 1.0),
-        fields: Optional[Dict[str, jax.Array]] = None,
-        origin: Tuple[float, ...] = (0.0, 0.0, 0.0),
-        periodic: Tuple[bool, ...] = None,
+        shape: tuple[int, ...],
+        size: tuple[float, ...] = (1.0, 1.0, 1.0),
+        fields: dict[str, jax.Array] | None = None,
+        origin: tuple[float, ...] = (0.0, 0.0, 0.0),
+        periodic: tuple[bool, ...] | None = None,
         **field_kwargs,
     ):
         """
-        Create grid directly.
-
-        Args:
-            shape: Grid shape (N1, N2, N3)
-            size: Physical size (L1, L2, L3)
-            fields: Dictionary of fields
-            origin: Origin point
-            periodic: Periodicity per dimension
-            **field_kwargs: Additional fields as keyword arguments
+        Parameters
+        ----------
+        shape : tuple of int
+            Number of voxels per direction.
+        size : tuple of float
+            Physical extent of the cell per direction.
+        fields : dict, optional
+            Named cell fields of shape ``shape + components``.
+        origin : tuple of float
+            Coordinates of the lower corner.
+        periodic : tuple of bool, optional
+            Periodicity per direction. Defaults to periodic in all directions.
+        **field_kwargs
+            Additional fields given as keyword arguments.
         """
         self.shape = shape
         self.size = size
@@ -64,125 +66,100 @@ class Grid(eqx.Module):
         self.fields.update(fields or {})
         self.metadata = {}
 
-        # Add fields from kwargs
         for key, value in field_kwargs.items():
             self.fields[key] = self._validate_field(value)
 
     def _validate_field(self, data: jax.Array) -> jax.Array:
-        """Validate field matches grid shape"""
         data = jnp.asarray(data)
         if data.shape[: self.ndim] != self.shape:
-            raise ValueError(
-                f"Field shape {data.shape} incompatible with grid {self.shape}"
-            )
+            raise ValueError(f"Field shape {data.shape} incompatible with grid {self.shape}")
         return data
 
-    # ========================================================================
-    # Geometry properties
-    # ========================================================================
-
+    # ------------------------------------------------------------------ #
+    # Geometry
+    # ------------------------------------------------------------------ #
     @property
     def ndim(self) -> int:
-        """Number of dimensions"""
+        """Number of spatial dimensions."""
         return len(self.shape)
 
     @property
     def dim(self) -> int:
-        """Alias for ndim (backward compatible)"""
+        """Alias for :attr:`ndim`."""
         return self.ndim
 
     @property
-    def spacing(self) -> Tuple[float, ...]:
-        """Grid spacing (cell size)"""
-        return tuple(L / N for L, N in zip(self.size, self.shape))
+    def spacing(self) -> tuple[float, ...]:
+        """Voxel size per direction."""
+        return tuple(L / N for L, N in zip(self.size, self.shape, strict=True))
 
     @property
     def num_cells(self) -> int:
-        """Total number of cells"""
+        """Total number of voxels."""
         return int(np.prod(self.shape))
 
     @property
     def volume_fractions(self) -> dict:
+        """Volume fraction of each marker value."""
         return {int(v): jnp.mean(self.markers == v) for v in jnp.unique(self.markers)}
 
     def cell_centers(self) -> jnp.ndarray:
-        """Cell center coordinates"""
+        """Coordinates of the voxel centres, shape ``shape + (ndim,)``."""
         h = self.spacing
         ranges = [
-            jnp.arange(N) * h[i] + h[i] / 2 + self.origin[i]
-            for i, N in enumerate(self.shape)
+            jnp.arange(N) * h[i] + h[i] / 2 + self.origin[i] for i, N in enumerate(self.shape)
         ]
         return jnp.stack(jnp.meshgrid(*ranges, indexing="ij"), axis=-1)
 
-    # ========================================================================
-    # Field access (multiple ways for convenience)
-    # ========================================================================
-
+    # ------------------------------------------------------------------ #
+    # Field access
+    # ------------------------------------------------------------------ #
     def __getitem__(self, key: str) -> jax.Array:
-        """Access field like grid['E']"""
         return self.fields[key]
 
-    def __setitem__(self, key: str, value: jax.Array):
-        """Set field like grid['E'] = value (creates new grid)"""
-        self.fields[key] = self._validate_field(value)
-
-    def add_field(self, name: str, data: jax.Array) -> "Grid":
-        """Add or update field (returns new Grid)"""
+    def add_field(self, name: str, data: jax.Array) -> Grid:
+        """Return a new grid with ``name`` added or replaced."""
         new_fields = {**self.fields, name: self._validate_field(data)}
         return Grid(self.shape, self.size, new_fields, self.origin, self.periodic)
 
-    def get_field(self, name: str, default=None) -> Optional[jax.Array]:
-        """Get field with optional default"""
+    def get_field(self, name: str, default=None) -> jax.Array | None:
+        """Return a field, or ``default`` if absent."""
         return self.fields.get(name, default)
 
     def has_field(self, name: str) -> bool:
-        """Check if field exists"""
+        """Whether a field of this name exists."""
         return name in self.fields
 
-    # ========================================================================
-    # Material property shortcuts (just convenience - they're still fields!)
-    # ========================================================================
-
     @property
-    def markers(self) -> Optional[jax.Array]:
-        """Marker field (backward compatible)"""
+    def markers(self) -> jax.Array | None:
+        """Phase marker field."""
         return self.get_field("markers")
 
-    def get_material_params(self) -> Tuple[jax.Array, jax.Array]:
-        """Get (E, nu) for solver compatibility"""
-        E = self.get_field("E")
-        nu = self.get_field("nu")
-        if E is None or nu is None:
-            raise ValueError("Material properties (E, nu) not found")
-        return E.ravel(), nu.ravel()
+    def apply_material_map(self, material_map: dict[int, dict[str, float]]) -> Grid:
+        """Return a new grid with per-phase properties expanded into fields.
 
-    def apply_material_map(self, material_map: Dict[int, Dict[str, float]]) -> "Grid":
-        """
-        Apply material properties from marker map.
+        Parameters
+        ----------
+        material_map : dict
+            ``{marker_id: {property_name: value}}``.
 
-        Args:
-            material_map: {marker_id: {'E': value, 'nu': value, ...}}
-
-        Example:
-            materials = {
-                0: {'E': 1.0, 'nu': 0.3},
-                1: {'E': 1e-6, 'nu': 0.4},
-            }
-            grid = grid.apply_material_map(materials)
+        Examples
+        --------
+        >>> grid = grid.apply_material_map(          # doctest: +SKIP
+        ...     {0: {"E": 1.0, "nu": 0.3}, 1: {"E": 1e-6, "nu": 0.4}}
+        ... )
         """
         if "markers" not in self.fields:
-            raise ValueError("Grid must have 'markers' field")
+            raise ValueError("Grid must have a 'markers' field")
 
         markers = self.fields["markers"]
         new_fields = {**self.fields}
 
-        # Get all property names
         prop_names = set()
         for props in material_map.values():
             prop_names.update(props.keys())
-        prop_names.discard("name")  # Metadata, not field
+        prop_names.discard("name")
 
-        # Create field for each property
         for prop_name in prop_names:
             field = jnp.zeros(self.shape)
             for marker_id, props in material_map.items():
@@ -192,205 +169,92 @@ class Grid(eqx.Module):
 
         return Grid(self.shape, self.size, new_fields, self.origin, self.periodic)
 
-    # ========================================================================
-    # Grid operations
-    # ========================================================================
-
     def broadcast_to_grid(self, tensor):
-        """Broadcast tensor to grid shape (backward compatible)"""
+        """Broadcast a scalar or jaxmat tensor to a field over the grid."""
         from jaxmat.tensors import Tensor
 
         if isinstance(tensor, Tensor):
             return tensor.__class__(
-                array=jnp.broadcast_to(
-                    tensor.array,
-                    self.shape + tensor.array.shape,
-                )
+                array=jnp.broadcast_to(tensor.array, self.shape + tensor.array.shape)
             )
-        else:
-            return jnp.broadcast_to(tensor, self.shape)
+        return jnp.broadcast_to(tensor, self.shape)
 
-    # ========================================================================
-    # PyVista integration (built-in, no separate adapter needed)
-    # ========================================================================
-
-    def to_pyvista(self) -> pv.ImageData:
-        """Convert to PyVista ImageData"""
-        pv_grid = pv.ImageData()
-        pv_grid.dimensions = tuple(n + 1 for n in self.shape)
-        pv_grid.origin = self.origin
-        pv_grid.spacing = self.spacing
-
-        # Add all fields
-        for name, field in self.fields.items():
-            if field.ndim == self.ndim:
-                # Scalar field
-                pv_grid.cell_data[name] = np.array(field).flatten(order="F")
-            else:
-                # Tensor field
-                n_cells = self.num_cells
-                extra_shape = field.shape[self.ndim :]
-                reshaped = np.array(field).reshape((n_cells,) + extra_shape, order="F")
-                pv_grid.cell_data[name] = reshaped
-
-        return pv_grid
-
-    def save(self, filename: str):
-        """Save to VTI file"""
-        pv_grid = self.to_pyvista()
-        pv_grid.save(filename)
-
-    def plot(self, field: str = "markers", **kwargs):
-        """Quick plot of a field"""
-        pv_grid = self.to_pyvista()
-        pv_grid.plot(scalars=field, **kwargs)
-
-    # ========================================================================
-    # Factory methods (class methods for creation)
-    # ========================================================================
-
+    # ------------------------------------------------------------------ #
+    # Input / output (delegates to eshelbyx.io, which owns PyVista)
+    # ------------------------------------------------------------------ #
     @classmethod
     def from_vti(
         cls,
         filename: str,
-        marker_field: Optional[str] = None,
-        material_map: Optional[Dict] = None,
-    ) -> "Grid":
-        """
-        Load from VTI file.
+        marker_field: str | None = None,
+        material_map: dict | None = None,
+    ) -> Grid:
+        """Read a grid from a VTK image file. See :func:`eshelbyx.io.read_vti`."""
+        from eshelbyx.io import read_vti
 
-        Args:
-            filename: Path to VTI file
-            marker_field: Field to use as markers (None = first field)
-            material_map: Optional material property mapping
-        """
-        pv_grid = pv.read(filename)
+        return read_vti(filename, marker_field, material_map)
 
-        # Extract geometry
-        nx, ny, nz = tuple(d - 1 for d in pv_grid.dimensions)
-        shape = (nx, ny, nz)
-        size = tuple(pv_grid.spacing[i] * n for i, n in enumerate((nx, ny, nz)))
-        origin = tuple(pv_grid.origin)
+    def to_pyvista(self):
+        """Convert to a PyVista ``ImageData``. See :func:`eshelbyx.io.to_pyvista`."""
+        from eshelbyx.io import to_pyvista
 
-        # Extract fields
-        fields = {}
-        for name, data in pv_grid.cell_data.items():
-            fields[name] = jnp.asarray(np.array(data).reshape(shape, order="F"))
+        return to_pyvista(self)
 
-        # Handle markers
-        if marker_field is None and len(fields) > 0:
-            first_key = list(fields.keys())[0]
-            if "markers" not in fields:
-                fields["markers"] = fields[first_key]
-        elif marker_field and marker_field != "markers":
-            if marker_field in fields:
-                fields["markers"] = fields[marker_field]
+    def save(self, filename: str, fields: dict[str, jax.Array] | None = None):
+        """Write the grid, and optionally extra result fields, to a VTK file."""
+        from eshelbyx.io import write_vti
 
-        # Create grid
-        grid = cls(shape, size, fields, origin)
+        write_vti(self, filename, fields)
 
-        # Apply materials if provided
-        if material_map:
-            grid = grid.apply_material_map(material_map)
+    def plot(self, field: str = "markers", **kwargs):
+        """Quick plot of one field."""
+        from eshelbyx.io import plot
 
-        return grid
+        plot(self, field, **kwargs)
 
+    # ------------------------------------------------------------------ #
+    # Construction
+    # ------------------------------------------------------------------ #
     @classmethod
     def from_function(
         cls,
-        shape: Tuple[int, ...],
+        shape: tuple[int, ...],
         marker_fn: Callable,
-        size: Tuple[float, ...] = (1.0, 1.0, 1.0),
+        size: tuple[float, ...] = (1.0, 1.0, 1.0),
         **field_fns,
-    ) -> "Grid":
-        """
-        Create from function.
+    ) -> Grid:
+        """Build a grid by evaluating functions at the voxel centres.
 
-        Args:
-            shape: Grid shape
-            marker_fn: Function (x, y, z) -> markers
-            size: Physical size
-            **field_fns: Additional field functions
+        Parameters
+        ----------
+        shape : tuple of int
+            Number of voxels per direction.
+        marker_fn : callable
+            ``(x, y, z) -> markers``, evaluated on the voxel-centre coordinates.
+        size : tuple of float
+            Physical extent of the cell.
+        **field_fns
+            Further ``(x, y, z) -> field`` callables, stored under their keyword.
         """
         origin = tuple(0.0 for _ in shape)
 
-        # Create coordinate arrays
-        h = tuple(L / N for L, N in zip(size, shape))
+        h = tuple(L / N for L, N in zip(size, shape, strict=True))
         ranges = [jnp.arange(N) * h[i] + h[i] / 2 for i, N in enumerate(shape)]
         coords = jnp.stack(jnp.meshgrid(*ranges, indexing="ij"), axis=-1)
 
-        # Evaluate marker function
         if len(shape) == 3:
             x, y, z = coords[..., 0], coords[..., 1], coords[..., 2]
-            markers = marker_fn(x, y, z)
         elif len(shape) == 2:
             x, y = coords[..., 0], coords[..., 1]
-            markers = marker_fn(x, y, jnp.zeros_like(x))
+            z = jnp.zeros_like(x)
         else:
-            raise NotImplementedError("Only 2D/3D supported")
+            raise NotImplementedError("Only 2D and 3D grids are supported")
 
-        fields = {"markers": markers}
-
-        # Additional fields
+        fields = {"markers": marker_fn(x, y, z)}
         for name, fn in field_fns.items():
-            if len(shape) == 3:
-                fields[name] = fn(x, y, z)
-            else:
-                fields[name] = fn(x, y, jnp.zeros_like(x))
+            fields[name] = fn(x, y, z)
 
         return cls(shape, size, fields, origin)
 
     def __repr__(self) -> str:
         return f"Grid(shape={self.shape}, fields={list(self.fields.keys())})"
-
-
-class OldGrid(eqx.Module):
-    size: jax.Array
-    shape: tuple = eqx.field(static=True)
-    markers: jax.Array
-    dim: int = 3
-
-    def __init__(self, markers, size=None):
-        self.dim = markers.ndim
-        self.shape = markers.shape
-        if size is None:
-            self.size = jnp.array(self.shape, dtype=jnp.float64)
-        else:
-            self.size = jnp.asarray(size)
-        self.markers = markers
-
-    def broadcast_to_grid(self, tensor):
-        if isinstance(tensor, Tensor):
-            return tensor.__class__(
-                array=jnp.broadcast_to(
-                    tensor.array,
-                    self.shape + tensor.array.shape,
-                )
-            )
-
-
-def load_vtk_grid(filename, marker_name=None):
-    pv_grid = pv.read(filename)
-
-    # Extract phase markers
-    if marker_name is None:
-        phase = pv_grid.cell_data.values()[0]
-    else:
-        phase = pv_grid.cell_data.get(marker_name)
-
-    # Recover dimensions
-    nx, ny, nz = jnp.array(pv_grid.dimensions) - 1
-    phase = phase.reshape((nx, ny, nz), order="F")
-
-    # Recover physical size
-    Lx = pv_grid.spacing[0] * nx
-    Ly = pv_grid.spacing[1] * ny
-    Lz = pv_grid.spacing[2] * nz
-
-    grid = Grid(
-        markers=jnp.asarray(phase),
-        shape=(int(nx), int(ny), int(nz)),
-        size=jnp.array([Lx, Ly, Lz], dtype=jnp.float64),
-    )
-
-    return grid, pv_grid
