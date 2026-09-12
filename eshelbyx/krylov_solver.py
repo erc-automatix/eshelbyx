@@ -1,6 +1,6 @@
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
 import lineax as lx
 
 
@@ -9,9 +9,7 @@ class AbstractLSOperator(lx.AbstractLinearOperator):
         raise NotImplementedError("Matrix-free operator")
 
     def in_structure(self):
-        return jax.ShapeDtypeStruct(
-            shape=self.Gamma0.grid.shape + (3, 3), dtype=jnp.float64
-        )
+        return jax.ShapeDtypeStruct(shape=(*self.Gamma0.grid.shape, 3, 3), dtype=jnp.float64)
 
     def out_structure(self):
         return self.in_structure()
@@ -58,8 +56,9 @@ def KrylovAEMSolver(E_macro, alpha, Gamma_0, max_iter=100, tol=1e-6, options=Non
     E_macro : jax.Array
         The imposed macroscopic strain (broadcast to the grid size)
     alpha : callable
-        A function alpha(eps*, scale) which returns the true strain `epsilon` as a function of the auxiliary
-        strain. The scale argument allows to change the amplitude of the reference medium by considering scale*C0.
+        A function ``alpha(eps_aux, scale)`` returning the true strain
+        ``epsilon`` as a function of the auxiliary strain. ``scale`` rescales
+        the reference medium, which becomes ``scale * C0``.
     Gamma_0 : eshelbyx.green_operator.GreenOperator
         The Green operator associated with the reference medium.
     max_iter : int, optional
@@ -67,7 +66,8 @@ def KrylovAEMSolver(E_macro, alpha, Gamma_0, max_iter=100, tol=1e-6, options=Non
     tol : float, optional
         Convergence tolerance, by default 1e-6
     options : dict
-        Additional solver-specific dictionary e.g. `options = {"restart": 20, "stagnation_iters": 20}`
+        Extra solver options, e.g.
+        ``{"restart": 20, "stagnation_iters": 20}``.
 
     Returns
     -------

@@ -1,6 +1,6 @@
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
 
 
 # --------------------------------------------------------------------------- #
@@ -37,9 +37,7 @@ def _operators(Gamma_0):
     """
 
     def inner(X, Y):
-        return jnp.sum(
-            jnp.einsum("...ij,...ij->...", jnp.conjugate(X), Gamma_0.apply_C0(Y))
-        )
+        return jnp.sum(jnp.einsum("...ij,...ij->...", jnp.conjugate(X), Gamma_0.apply_C0(Y)))
 
     def norm(X):
         return jnp.sqrt(jnp.real(inner(X, X)))
@@ -52,7 +50,7 @@ def _operators(Gamma_0):
 
 
 # --------------------------------------------------------------------------- #
-# Adaptive Eyre–Milton with reference-medium auto-scaling (A2EM)
+# Adaptive Eyre-Milton with reference-medium auto-scaling (A2EM)
 # --------------------------------------------------------------------------- #
 @eqx.filter_jit
 def A2EMSolver(
@@ -65,7 +63,7 @@ def A2EMSolver(
     step_adaptation=True,
     verbose=False,
 ):
-    """Adaptive Eyre–Milton solver with reference-medium auto-scaling.
+    """Adaptive Eyre-Milton solver with reference-medium auto-scaling.
 
     Parameters
     ----------
@@ -97,7 +95,7 @@ def A2EMSolver(
     floor = jnp.maximum(1e-30, 1e-14 * E_ref)  # relative denominator floor
 
     def step(carry):
-        it, X, eps_aux, W, scale, Delta = carry
+        it, X, eps_aux, W, scale, _Delta = carry
 
         aX = alpha(X, scale)
         Y = project(aX)
@@ -158,11 +156,11 @@ def A2EMSolver(
 
 
 # --------------------------------------------------------------------------- #
-# Adaptive Eyre–Milton (AEM)
+# Adaptive Eyre-Milton (AEM)
 # --------------------------------------------------------------------------- #
 @eqx.filter_jit
 def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=False):
-    """Adaptive Eyre–Milton solver (fixed reference medium).
+    """Adaptive Eyre-Milton solver (fixed reference medium).
 
     Returns raw ``(..., 3, 3)`` arrays and an ``info`` dict with ``num_steps``,
     ``Delta_final`` and a per-iteration ``Delta`` history.
@@ -219,11 +217,11 @@ def AEMSolver(E_macro, alpha, Gamma_0, max_iter=1000, tol=1e-10, verbose=False):
 
 
 # --------------------------------------------------------------------------- #
-# Basic Moulinec–Suquet scheme
+# Basic Moulinec-Suquet scheme
 # --------------------------------------------------------------------------- #
 @eqx.filter_jit
 def MSSolver(E_macro, C_eps, C_eps_0, Gamma_0, max_iter=100, tol=1e-10, verbose=False):
-    """Moulinec–Suquet fixed-point solver.
+    """Moulinec-Suquet fixed-point solver.
 
     Parameters
     ----------
@@ -294,7 +292,7 @@ def DRSolver_(
     z0_scale=2.0,
     verbose=False,
 ):
-    """Douglas--Rachford solver.
+    """Douglas-Rachford solver.
 
     Parameters
     ----------
@@ -308,11 +306,11 @@ def DRSolver_(
     Returns eps, sigma (grid arrays) and info with ``num_steps``/``Delta_final``.
     """
     E_macro = _to_array(E_macro)
-    inner, norm, project = _operators(Gamma_0)
+    _inner, norm, project = _operators(Gamma_0)
     Enorm = norm(E_macro) + 1e-300
 
     def cond(state):
-        k, z, delta = state
+        k, _z, delta = state
         return jnp.logical_and(k < max_iter, delta > tol)
 
     def body(state):
@@ -357,12 +355,12 @@ def DRSolver(
     Recover eps = J_B(z; scale), sigma = scale*C0:(z - eps).
     """
     E_macro = _to_array(E_macro)
-    inner, norm, project = _operators(Gamma_0)
+    _inner, norm, project = _operators(Gamma_0)
     Enorm = norm(E_macro) + 1e-300
     floor = 1e-14 * Enorm
 
     def cond(state):
-        k, z, scale, delta = state
+        k, _z, _scale, delta = state
         return jnp.logical_and(k < max_iter, delta > tol)
 
     def body(state):

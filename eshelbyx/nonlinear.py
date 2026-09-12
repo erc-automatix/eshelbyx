@@ -26,20 +26,21 @@ material parameters. For heterogeneous properties the *behaviour itself* must be
 batched: build it with array-valued parameters (leading axis = n_voxels) so its
 pytree leaves are per-voxel, then vmap ``constitutive_update`` over the behaviour
 too, via ``eqx.filter_vmap``. ``jax.vmap`` with the behaviour as a closure, and
-jaxmat's ``batched_constitutive_update`` (which uses ``in_axes=(0,0,None)`` on
-``self.constitutive_update``), both share one parameter set and cannot express
-spatial variation.
+jaxmat's ``batched_constitutive_update`` (which uses ``in_axes=(0, 0, None)`` on
+``self.constitutive_update``), both share one parameter set and cannot
+express spatial variation.
 """
 
+from collections.abc import Callable
+from typing import NamedTuple
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
-from typing import NamedTuple, Callable
-
 from jaxmat.tensors import SymmetricTensor2
 
-
-# FIXME: use jaxmat's natural tensorial/array representation to avoid to/from Mandel conversions
+# FIXME: use jaxmat's natural tensorial/array representation to avoid to/from Mandel
+# conversions
 
 SQ2 = jnp.sqrt(2.0)
 
@@ -138,9 +139,7 @@ def make_alpha_tangent(Ct, C0_mandel):
         shape = deps_field.shape
         C0s = scale * C0_mandel
         d6 = to_mandel(deps_field.reshape(-1, 3, 3))
-        out6 = jax.vmap(lambda Cv, dv: 2.0 * jnp.linalg.solve(Cv + C0s, C0s @ dv))(
-            Ct, d6
-        )
+        out6 = jax.vmap(lambda Cv, dv: 2.0 * jnp.linalg.solve(Cv + C0s, C0s @ dv))(Ct, d6)
         return from_mandel(out6).reshape(shape)
 
     return alpha
@@ -195,8 +194,10 @@ def newton_aem(
     return eps, sig, {"newton_steps": k, "newton_residuals": residuals}
 
 
-# FIXME: should have better user callback facility to compute stress averages, output fields to filed, etc. not just the final state
-# FIXME: also use a jax scan and checkpointing (using equinox maybe ?) for path-dependent adjoints
+# FIXME: should have better user callback facility to compute stress averages, output
+# fields to filed, etc. not just the final state
+# FIXME: also use a jax scan and checkpointing (using equinox maybe ?) for path-
+# dependent adjoints
 def solve_incremental(
     inner_solver,
     E_path,
