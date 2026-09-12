@@ -1,6 +1,6 @@
 [project]
 name = "eshelbyx"
-version = "0.1.0"
+version = "0.0.2"
 description = "FFT-based computational homogenization of heterogeneous materials in JAX"
 readme = "README.md"
 authors = [
