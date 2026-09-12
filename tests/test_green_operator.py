@@ -324,3 +324,32 @@ def test_output_is_real_and_symmetric():
     assert out.shape == Y.shape
     assert jnp.isrealobj(out)
     assert float(jnp.abs(out - jnp.swapaxes(out, -1, -2)).max()) < 1e-14
+
+
+# --------------------------------------------------------------------------- #
+# 6. Non-cubic voxels
+# --------------------------------------------------------------------------- #
+NON_CUBIC = [
+    ((8, 8, 8), (1.0, 2.0, 4.0)),  # same counts, different extents
+    ((8, 16, 4), (1.0, 1.0, 1.0)),  # same extents, different counts
+    ((6, 10, 8), (0.5, 2.0, 3.0)),  # both
+]
+
+
+@pytest.mark.parametrize("scheme_name", list(SCHEMES))
+@pytest.mark.parametrize("shape, size", NON_CUBIC)
+def test_patch_test_on_non_cubic_voxels(scheme_name, shape, size):
+    """Gamma_0.C0 must still reproduce a compatible strain when the voxels are
+    not cubic."""
+    grid = Grid(shape=shape, size=size, fields={"markers": jnp.zeros(shape)})
+    disc = SCHEMES[scheme_name](grid)
+    Gamma_0 = GreenOperator(grid, make_C0(), disc)
+
+    mode = (1, 2, 1)
+    if mode_is_singular(disc, shape, mode):
+        pytest.skip("mode is masked for this scheme")
+    u = single_mode_displacement(shape, mode, jnp.array([0.3, -0.7, 0.5]))
+    eps_star = compatible_strain(disc, u)
+
+    lhs = Gamma_0.mv(Gamma_0.apply_C0(eps_star))
+    assert rel(lhs, eps_star) < 1e-10

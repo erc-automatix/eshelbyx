@@ -129,25 +129,39 @@ class MoulinecSuquetDiscretization(DiscretizationScheme):
 
 
 class WillotDiscretization(DiscretizationScheme):
+    """Rotated finite differences on the voxel corners (Willot).
+
+    .. math::
+        D_i = \\frac{2i}{h_i} \\sin(q_i/2) \\prod_{j \\neq i} \\cos(q_j/2),
+        \\qquad q_i = \\xi_i h_i
+
+    The usual choice at high contrast. Each component carries its own voxel
+    spacing ``h_i``; dividing them all by ``h_x`` instead leaves the operator
+    correct on cubic voxels and wrong by ``h_i / h_x`` otherwise.
+    """
+
     tol: float = 1e-12
 
+    def _h(self, grid):
+        return [grid.size[i] / grid.shape[i] for i in range(3)]
+
     def _q(self, xi, grid):
-        # q_i = 2π n_i / N_i = xi_i * (L_i / N_i)
-        return jnp.stack([xi[..., i] * (grid.size[i] / grid.shape[i]) for i in range(3)], axis=-1)
+        # q_i = 2 pi n_i / N_i = xi_i * h_i
+        h = self._h(grid)
+        return jnp.stack([xi[..., i] * h[i] for i in range(3)], axis=-1)
 
     def _D(self, xi, grid):
         q = self._q(xi, grid) / 2
-        return (
-            2j
-            * jnp.stack(
-                [
-                    jnp.sin(q[..., 0]) * jnp.cos(q[..., 1]) * jnp.cos(q[..., 2]),
-                    jnp.cos(q[..., 0]) * jnp.sin(q[..., 1]) * jnp.cos(q[..., 2]),
-                    jnp.cos(q[..., 0]) * jnp.cos(q[..., 1]) * jnp.sin(q[..., 2]),
-                ],
-                axis=-1,
-            )
-            / (grid.size[0] / grid.shape[0])
+        h = self._h(grid)
+        sin, cos = jnp.sin(q), jnp.cos(q)
+        # Component i is scaled by its own spacing h_i
+        return 2j * jnp.stack(
+            [
+                sin[..., 0] * cos[..., 1] * cos[..., 2] / h[0],
+                cos[..., 0] * sin[..., 1] * cos[..., 2] / h[1],
+                cos[..., 0] * cos[..., 1] * sin[..., 2] / h[2],
+            ],
+            axis=-1,
         )
 
     def _singular_mask(self, xi, grid):
