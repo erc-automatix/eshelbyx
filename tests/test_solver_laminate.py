@@ -216,3 +216,53 @@ def test_laminate(contrast, solver, grid_size, discretization):
     assert jnp.allclose(sig_num_xy, sig_an_xy)
     assert jnp.allclose(sig_num_xz, sig_an_xz)
     assert jnp.allclose(sig_num_yz, sig_an_yz)
+
+
+# --------------------------------------------------------------------------- #
+# 2D plane strain against the closed-form laminate solution
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("solver", solvers)
+def test_2d_laminate_matches_harmonic_mean(solver):
+    """Laminate normal to y under E_yy = 1, plane strain.
+
+    The transverse strains are uniform and zero, so sigma_yy = (lambda + 2 mu)
+    eps_yy in each layer with sigma_yy continuous. Averaging eps_yy to 1 gives
+    sigma_yy as the harmonic mean of the oedometric moduli.
+    """
+    N = 32
+    E1, E2, nu = 1.0, 10.0, 0.3
+    grid = Grid.from_function(shape=(N, N), marker_fn=lambda x, y, z: jnp.where(y >= 0.5, 2, 1))
+    grid = grid.apply_material_map({1: {"E": E1, "nu": nu}, 2: {"E": E2, "nu": nu}})
+    C0 = jm.LinearElasticIsotropic(E=3.0, nu=nu).C
+
+    def _apply_alpha(eps, material_params, C0):
+        Ei, nui = material_params
+        lmbda = Ei * nui / (1 + nui) / (1 - 2 * nui)
+        mu = Ei / 2 / (1 + nui)
+        C = IsotropicTensor4(kappa=lmbda + 2 / 3 * mu, mu=mu)
+        return ((C + C0).inv @ (C0 * 2.0)) @ eps
+
+    @eqx.filter_jit
+    def apply_alpha(eps, params, C0):
+        flat = SymmetricTensor2(tensor=jnp.asarray(eps).reshape(-1, 3, 3))
+        out = jax.vmap(_apply_alpha, in_axes=(0, 0, None))(flat, params, C0)
+        return out.tensor.reshape(eps.shape)
+
+    params = (grid["E"].ravel(), grid["nu"].ravel())
+
+    def alpha(eps, scale=1.0):
+        return apply_alpha(eps, params, C0 * scale)
+
+    Gamma_0 = GreenOperator(grid, C0, WillotDiscretization(grid))
+    E_macro = grid.broadcast_to_grid(
+        SymmetricTensor2(array=jnp.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0]))
+    )
+    eps, sig, _ = solver(E_macro, alpha, Gamma_0, tol=1e-12, max_iter=2000)
+
+    def oedometric(E):
+        return E * (1 - nu) / ((1 + nu) * (1 - 2 * nu))
+
+    expected = 2.0 / (1.0 / oedometric(E1) + 1.0 / oedometric(E2))
+
+    assert jnp.allclose(jnp.mean(eps, axis=(0, 1)), jnp.diag(jnp.array([0.0, 1.0, 0.0])))
+    assert abs(float(jnp.mean(sig, axis=(0, 1))[1, 1]) - expected) < 1e-8 * expected

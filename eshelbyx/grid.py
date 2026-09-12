@@ -62,11 +62,14 @@ class Grid(eqx.Module):
             Additional fields given as keyword arguments.
         """
         # Static fields must be hashable, so normalise to tuples of Python
-        # scalars; callers routinely pass lists or numpy values.
+        # scalars; callers routinely pass lists or numpy values. size, origin
+        # and periodic default to three entries, so they are truncated to the
+        # grid's own dimension to keep a 2D grid consistent.
         self.shape = tuple(int(n) for n in shape)
-        self.size = tuple(float(L) for L in size)
-        self.origin = tuple(float(o) for o in origin)
-        self.periodic = tuple(bool(p) for p in periodic) if periodic else (True,) * len(self.shape)
+        ndim = len(self.shape)
+        self.size = tuple(float(L) for L in size)[:ndim]
+        self.origin = tuple(float(o) for o in origin)[:ndim]
+        self.periodic = tuple(bool(p) for p in periodic)[:ndim] if periodic else (True,) * ndim
         self.fields = {"markers": 0}
         self.fields.update(fields or {})
         self.metadata = {}
@@ -241,6 +244,8 @@ class Grid(eqx.Module):
         **field_fns
             Further ``(x, y, z) -> field`` callables, stored under their keyword.
         """
+        # size defaults to three entries; truncate it for a 2D grid.
+        size = tuple(size)[: len(shape)]
         origin = tuple(0.0 for _ in shape)
 
         h = tuple(L / N for L, N in zip(size, shape, strict=True))

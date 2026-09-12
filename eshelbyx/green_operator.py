@@ -20,7 +20,65 @@ def _lame(C0):
     return lmbda, mu
 
 
+# Kelvin (Mandel) packing of a symmetric second-order tensor, in jaxmat's
+# convention: (xx, yy, zz, sqrt2*xy, sqrt2*xz, sqrt2*yz).
+#
+# These duplicate SymmetricTensor2(tensor=...).array and
+# SymmetricTensor2(array=...).tensor, and tests/test_green_operator.py asserts
+# they agree with them to the last bit. They exist only because jaxmat's
+# versions are built from a gather and a scatter-add plus a symmetrisation
+# pass, which do not fuse inside the jitted transform pair. Measured at 96^3,
+# Gamma_0.mv costs 262 ms with these, 327 ms with jaxmat's packing and 362 ms
+# with jaxmat's packing and unpacking -- the last being slower than doing no
+# six-component packing at all (326 ms), i.e. jaxmat's conversions cost more
+# than the FFT work they save.
+#
+# Delete these in favour of the properties once jaxmat has a fast path; the
+# equivalence test makes that a one-line change.
+_KELVIN_OFF = jnp.sqrt(2.0)
+
+
+def _to_kelvin(T):
+    """(..., 3, 3) tensor -> (..., 6) Kelvin array, symmetrising as it goes."""
+    T = 0.5 * (T + jnp.swapaxes(T, -1, -2))
+    return jnp.stack(
+        [
+            T[..., 0, 0],
+            T[..., 1, 1],
+            T[..., 2, 2],
+            _KELVIN_OFF * T[..., 0, 1],
+            _KELVIN_OFF * T[..., 0, 2],
+            _KELVIN_OFF * T[..., 1, 2],
+        ],
+        axis=-1,
+    )
+
+
+def _from_kelvin(array):
+    """(..., 6) Kelvin array -> (..., 3, 3) tensor."""
+    xx, yy, zz, xy, xz, yz = (array[..., k] for k in range(6))
+    xy, xz, yz = xy / _KELVIN_OFF, xz / _KELVIN_OFF, yz / _KELVIN_OFF
+    return jnp.stack(
+        [
+            jnp.stack([xx, xy, xz], axis=-1),
+            jnp.stack([xy, yy, yz], axis=-1),
+            jnp.stack([xz, yz, zz], axis=-1),
+        ],
+        axis=-2,
+    )
+
+
 class GreenOperator(lx.AbstractLinearOperator):
+    """Periodic Green operator of the reference medium, applied matrix-free.
+
+    The Fourier kernel is *not* cached. It is a pure function of D_plus,
+    D_minus and the singular mask, costing a handful of flops per mode, whereas
+    storing it needs a full (N1, N2, N3//2+1, 3, 3) complex array: 119 MB at
+    96^3 and several GB at 256^3, which made the kernel rather than the FFT the
+    binding constraint on resolution. Recomputing it inside the transform pair
+    is cheap next to the FFTs and frees that memory entirely.
+    """
+
     C0: Tensor
     grid: eqx.Module
     discretization: DiscretizationScheme
@@ -87,23 +145,40 @@ class GreenOperator(lx.AbstractLinearOperator):
         # independent. rfftn/irfftn work on that half throughout, which is exact
         # (see the discretization module docstring) and roughly halves both the
         # transform cost and the size of every intermediate spectral array.
+        # Y is symmetric, so only six of its nine components are independent,
+        # and it is real, so its spectrum is Hermitian. Transforming the six
+        # Kelvin components on the half spectrum rather than all nine on the
+        # full one is the cheapest form of the same operator: measured at 96^3,
+        # the transform pair costs 129 ms on nine components and 51 ms on six.
+        # The Kelvin sqrt(2) weights pass through the transform unchanged, since
+        # the FFT is linear and the packing is undone on the other side.
+        #
+        # _to_kelvin symmetrises as it packs, unlike jaxmat's constructor, which
+        # reads the upper triangle; a non-symmetric input is therefore averaged
+        # rather than silently truncated.
         with jax.named_scope("Gamma0/fft"):
-            Y_hat = jnp.fft.rfftn(Y, axes=(0, 1, 2))
+            axes = tuple(range(self.grid.ndim))
+            Y_hat = _from_kelvin(jnp.fft.rfftn(_to_kelvin(Y), axes=axes))
 
         with jax.named_scope("Gamma0/div"):
             v_hat = self.discretization.apply_divergence(Y_hat)
 
         with jax.named_scope("Gamma0/G0_hat"):
-            u_hat = jnp.einsum(
-                "...ij,...j->...i",
-                self.G0_hat,
-                v_hat,
-            )
+            u_hat = self._apply_G0(v_hat)
         with jax.named_scope("Gamma0/sym_grad"):
             eps_hat = self.discretization.apply_symmetric_gradient(u_hat)
 
+        # eps_hat is a symmetric gradient, hence symmetric by construction, so
+        # the same six-component packing applies on the way back with no
+        # symmetrisation needed.
         with jax.named_scope("Gamma0/ifft"):
-            return jnp.fft.irfftn(eps_hat, axes=(0, 1, 2), s=self.grid.shape)
+            return _from_kelvin(
+                jnp.fft.irfftn(
+                    _to_kelvin(eps_hat),
+                    axes=tuple(range(self.grid.ndim)),
+                    s=self.grid.shape,
+                )
+            )
 
     def Gamma_0_func(self, Y):
         return self._Gamma_0_func_impl(Y)

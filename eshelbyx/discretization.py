@@ -5,7 +5,7 @@ Half-spectrum convention
 All strain, stress and polarization fields are real, so their Fourier
 transforms are Hermitian: ``F(-k) = conj(F(k))``. The library therefore works
 on the *half spectrum* produced by ``jnp.fft.rfftn``, in which the last spatial
-axis is truncated to ``N3 // 2 + 1`` modes. Every array held by a
+axis is truncated to ``N // 2 + 1`` modes. Every array held by a
 ``DiscretizationScheme`` (``xi``, ``D_plus``, ``D_minus``, ``singular_mask``),
 and the Green kernel built from them, has this reduced shape.
 
@@ -18,6 +18,20 @@ Hermitian input to Hermitian output. The discarded half is recovered exactly by
 The practical consequence is that anything passed to ``apply_divergence`` or
 ``apply_symmetric_gradient`` must be a half-spectrum field from ``rfftn``, not a
 full ``fftn`` spectrum.
+
+Two- and three-dimensional grids
+--------------------------------
+A grid may be two-dimensional. Fields keep their full 3x3 tensor structure and
+``D`` keeps three components; the out-of-plane frequency is identically zero, so
+the out-of-plane component of ``D`` vanishes. This is plane strain: the strain
+may have a non-zero out-of-plane component imposed macroscopically, but nothing
+varies through the thickness. The out-of-plane displacement then decouples from
+the in-plane ones in the acoustic tensor, which is anti-plane shear, and is
+solved alongside at no extra cost.
+
+The acoustic tensor stays invertible in 2D: with ``D = (D1, D2, 0)`` it is block
+diagonal, a 2x2 in-plane block plus the scalar ``mu * D^2``, so the isotropic
+kernel formula needs no special case.
 """
 
 import equinox as eqx
@@ -45,29 +59,42 @@ def xi_array_1D(N, L, real=False):
 
 def spectral_shape(grid):
     """Shape of the half spectrum produced by ``rfftn`` on this grid."""
-    N1, N2, N3 = grid.shape
-    return (N1, N2, N3 // 2 + 1)
+    return (*grid.shape[:-1], grid.shape[-1] // 2 + 1)
 
 
-def xi_array_3D(grid):
+def spacing(grid, pad=1.0):
+    """Voxel spacing per direction, padded to three entries.
+
+    On a 2D grid the third entry is a placeholder: the out-of-plane frequency is
+    zero, so the corresponding component of ``D`` vanishes whatever the value,
+    and it only exists so the schemes can index ``h[2]`` unconditionally.
+    """
+    h = [L / N for L, N in zip(grid.size, grid.shape, strict=True)]
+    return h + [pad] * (3 - len(h))
+
+
+def xi_array(grid):
     """
     Grid of Fourier angular frequencies on the half spectrum.
 
-    Output shape: ``(N1, N2, N3 // 2 + 1, 3)``. The last spatial axis is
-    truncated because ``rfftn`` transforms it as a real axis; see the module
-    docstring.
+    Output shape: ``spectral_shape(grid) + (3,)``. The last spatial axis is
+    truncated because ``rfftn`` transforms it as a real axis. On a 2D grid the
+    third frequency component is identically zero; see the module docstring.
     """
-    N1, N2, N3 = grid.shape
-    L1, L2, L3 = grid.size
+    ndim = grid.ndim
+    axes = [
+        xi_array_1D(N, L, real=(i == ndim - 1))
+        for i, (N, L) in enumerate(zip(grid.shape, grid.size, strict=True))
+    ]
+    xi = jnp.stack(jnp.meshgrid(*axes, indexing="ij"), axis=-1)
+    if ndim < 3:
+        pad = jnp.zeros((*xi.shape[:-1], 3 - ndim))
+        xi = jnp.concatenate([xi, pad], axis=-1)
+    return xi
 
-    xi1 = xi_array_1D(N1, L1)
-    xi2 = xi_array_1D(N2, L2)
-    xi3 = xi_array_1D(N3, L3, real=True)
 
-    return jnp.stack(
-        jnp.meshgrid(xi1, xi2, xi3, indexing="ij"),
-        axis=-1,
-    )
+# Retained under its old name; 2D grids are supported, so the "3D" is a misnomer.
+xi_array_3D = xi_array
 
 
 class DiscretizationScheme(eqx.Module):
@@ -143,7 +170,7 @@ class WillotDiscretization(DiscretizationScheme):
     tol: float = 1e-12
 
     def _h(self, grid):
-        return [grid.size[i] / grid.shape[i] for i in range(3)]
+        return spacing(grid)
 
     def _q(self, xi, grid):
         # q_i = 2 pi n_i / N_i = xi_i * h_i
@@ -154,7 +181,10 @@ class WillotDiscretization(DiscretizationScheme):
         q = self._q(xi, grid) / 2
         h = self._h(grid)
         sin, cos = jnp.sin(q), jnp.cos(q)
-        # Component i is scaled by its own spacing h_i
+        # Component i is scaled by its own spacing h_i, not by h_x. Gamma_0 is
+        # homogeneous of degree zero in D, so a uniform mis-scaling of all three
+        # components cancels exactly; only the relative weighting matters, which
+        # is why this is invisible on cubic voxels and wrong on any other grid.
         return 2j * jnp.stack(
             [
                 sin[..., 0] * cos[..., 1] * cos[..., 2] / h[0],
@@ -168,10 +198,13 @@ class WillotDiscretization(DiscretizationScheme):
         xi_abs = jnp.abs(xi)
         zero_mode = jnp.all(xi == 0, axis=-1)
 
+        h = spacing(grid)
         flags = []
         for i in range(3):
-            is_even = grid.shape[i] % 2 == 0
-            qi = xi_abs[..., i] * (grid.size[i] / grid.shape[i])
+            # A direction the grid does not have carries xi_i = 0 and so has no
+            # Nyquist mode.
+            is_even = i < grid.ndim and grid.shape[i] % 2 == 0
+            qi = xi_abs[..., i] * h[i]
             flags.append(is_even & (jnp.abs(qi - jnp.pi) < self.tol))
 
         nyquist_pairs = (flags[0] & flags[1]) | (flags[0] & flags[2]) | (flags[1] & flags[2])
@@ -194,7 +227,7 @@ class StaggeredDiscretizationScheme(DiscretizationScheme):
 
 class SchneiderDiscretization(StaggeredDiscretizationScheme):
     def _h(self, grid):
-        return jnp.array([L / N for L, N in zip(grid.size, grid.shape, strict=True)])
+        return jnp.array(spacing(grid))
 
     def _D_plus(self, xi, grid):
         h = self._h(grid)

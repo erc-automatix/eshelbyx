@@ -82,12 +82,13 @@ def build(scheme_name, N):
 def single_mode_displacement(shape, mode, amp):
     """Real periodic displacement u(x) built from a single Fourier mode
     (mode and its Hermitian conjugate), so eps* excites exactly that mode."""
+    ndim = len(shape)
     u_hat = jnp.zeros((*shape, 3), dtype=jnp.complex128)
-    m = tuple(int(mi) % shape[i] for i, mi in enumerate(mode))
-    negm = tuple((-int(mi)) % shape[i] for i, mi in enumerate(mode))
+    m = tuple(int(mi) % shape[i] for i, mi in enumerate(mode[:ndim]))
+    negm = tuple((-int(mi)) % shape[i] for i, mi in enumerate(mode[:ndim]))
     u_hat = u_hat.at[m].set(amp)
     u_hat = u_hat.at[negm].set(jnp.conj(amp))
-    return jnp.fft.ifftn(u_hat, axes=(0, 1, 2)).real
+    return jnp.fft.ifftn(u_hat, axes=tuple(range(ndim))).real
 
 
 def compatible_strain(disc, u):
@@ -96,13 +97,15 @@ def compatible_strain(disc, u):
 
     The scheme's operators live on the half spectrum, so u must go through
     rfftn rather than fftn."""
-    u_hat = jnp.fft.rfftn(u, axes=(0, 1, 2))
+    ndim = u.ndim - 1
+    axes = tuple(range(ndim))
+    u_hat = jnp.fft.rfftn(u, axes=axes)
     eps_hat = disc.apply_symmetric_gradient(u_hat)
-    return jnp.fft.irfftn(eps_hat, axes=(0, 1, 2), s=u.shape[:3])
+    return jnp.fft.irfftn(eps_hat, axes=axes, s=u.shape[:ndim])
 
 
 def mode_is_singular(disc, shape, mode):
-    idx = tuple(int(mi) % shape[i] for i, mi in enumerate(mode))
+    idx = tuple(int(mi) % shape[i] for i, mi in enumerate(mode[: len(shape)]))
     return bool(disc.singular_mask[idx])
 
 
@@ -242,11 +245,8 @@ if __name__ == "__main__":
 # 5. Half-spectrum equivalence
 # --------------------------------------------------------------------------- #
 def _gamma_0_full_spectrum(grid, disc, C0, Y):
-    """Reference implementation of Gamma_0 on the FULL fftn spectrum.
-
-    Kept as a test-only oracle: the library uses rfftn throughout, and this
-    pins that optimisation to the mathematically transparent version.
-    """
+    """Gamma_0 on the full fftn spectrum: a test-only oracle for the rfftn
+    implementation."""
     from eshelbyx.discretization import xi_array_1D
     from eshelbyx.spectral_kernels import compute_isotropic_G0_hat
 
@@ -282,23 +282,17 @@ def _gamma_0_full_spectrum(grid, disc, C0, Y):
 @pytest.mark.parametrize("scheme_name", list(SCHEMES))
 @pytest.mark.parametrize("N", [8, 9])
 def test_half_spectrum_matches_full_spectrum(scheme_name, N, request):
+    """rfftn is exact: every scheme satisfies D(-xi) = conj(D(xi)), so the
+    discarded half of the spectrum carries no independent information."""
     if scheme_name == "MS" and N % 2 == 0:
         request.node.add_marker(
             pytest.mark.xfail(
                 strict=True,
-                reason="MS is ambiguous at the Nyquist plane on even grids. "
-                "rfftfreq places it at xi3=+pi/h and fftfreq at -pi/h, and since "
-                "D=i*xi is odd the two conventions disagree there. Willot and "
-                "Schneider are insensitive (their D is even at Nyquist, or the "
-                "sign cancels between divergence and symmetric gradient). Same "
-                "root cause as the MS/even idempotency xfail: MS masks only k=0 "
-                "and never Nyquist. Retire this when MS gains a Nyquist mask.",
+                reason="MS masks only k=0, not Nyquist, and D=i*xi is odd, so "
+                "rfftfreq (+pi/h) and fftfreq (-pi/h) disagree there on even "
+                "grids. Retire this when MS gains a Nyquist mask.",
             )
         )
-    """rfftn is exact, not an approximation: every scheme satisfies
-    D(-xi) = conj(D(xi)), so the discarded half of the spectrum carries no
-    independent information. Checked on both an even and an odd grid, since the
-    Nyquist plane only exists for even N."""
     grid, disc, Gamma_0 = build(scheme_name, N=N)
 
     key = jr.PRNGKey(0)
@@ -315,8 +309,7 @@ def test_half_spectrum_matches_full_spectrum(scheme_name, N, request):
 
 
 def test_output_is_real_and_symmetric():
-    """irfftn would silently discard an imaginary part if the operator did not
-    preserve Hermitian symmetry, so check the symmetry of the result instead."""
+    """Gamma_0 must return a real, symmetric field."""
     grid, _, Gamma_0 = build("Willot", N=8)
     Y = jr.normal(jr.PRNGKey(1), (*grid.shape, 3, 3))
     Y = 0.5 * (Y + jnp.swapaxes(Y, -1, -2))
@@ -353,3 +346,66 @@ def test_patch_test_on_non_cubic_voxels(scheme_name, shape, size):
 
     lhs = Gamma_0.mv(Gamma_0.apply_C0(eps_star))
     assert rel(lhs, eps_star) < 1e-10
+
+
+# --------------------------------------------------------------------------- #
+# 7. Two-dimensional grids (plane strain)
+# --------------------------------------------------------------------------- #
+def build_2d(scheme_name, N):
+    grid = Grid(shape=(N, N), size=(1.0, 1.0), fields={"markers": jnp.zeros((N, N))})
+    disc = SCHEMES[scheme_name](grid)
+    return grid, disc, GreenOperator(grid=grid, C0=make_C0(), discretization=disc)
+
+
+@pytest.mark.parametrize("scheme_name", list(SCHEMES))
+def test_2d_out_of_plane_frequency_vanishes(scheme_name):
+    _, disc, _ = build_2d(scheme_name, 8)
+    assert disc.xi.shape == (8, 8 // 2 + 1, 3)
+    assert jnp.all(disc.xi[..., 2] == 0.0)
+    assert jnp.all(disc.D_plus[..., 2] == 0.0)
+    assert jnp.all(disc.D_minus[..., 2] == 0.0)
+
+
+@pytest.mark.parametrize("scheme_name", list(SCHEMES))
+def test_2d_patch_test(scheme_name):
+    """Gamma_0.C0 reproduces a compatible strain on a 2D grid."""
+    grid, disc, Gamma_0 = build_2d(scheme_name, 16)
+    u = single_mode_displacement(grid.shape, (1, 2), AMP)
+    eps_star = compatible_strain(disc, u)
+    assert rel(Gamma_0.mv(Gamma_0.apply_C0(eps_star)), eps_star) < ATOL
+
+
+@pytest.mark.parametrize("scheme_name", list(SCHEMES))
+def test_2d_matches_extruded_3d(scheme_name):
+    """A 2D grid is plane strain: it must give the same answer as a 3D grid one
+    voxel thick carrying the same in-plane field.
+
+    An odd N is used because 2D halves the y axis while 3D halves z, so on an
+    even grid the two disagree at the y-Nyquist plane for MS -- the same
+    limitation as test_half_spectrum_matches_full_spectrum.
+    """
+    N = 9
+    Y = jr.normal(jr.PRNGKey(0), (N, N, 3, 3))
+    Y = 0.5 * (Y + jnp.swapaxes(Y, -1, -2))
+
+    _, _, G2 = build_2d(scheme_name, N)
+    grid3 = Grid(
+        shape=(N, N, 1), size=(1.0, 1.0, 1.0 / N), fields={"markers": jnp.zeros((N, N, 1))}
+    )
+    G3 = GreenOperator(grid=grid3, C0=make_C0(), discretization=SCHEMES[scheme_name](grid3))
+
+    out3 = G3.mv(jnp.broadcast_to(Y[:, :, None], (N, N, 1, 3, 3)))[:, :, 0]
+    assert rel(G2.mv(Y), out3) < 1e-12
+
+
+def test_2d_anti_plane_shear_decouples():
+    """With D = (D1, D2, 0) the acoustic tensor is block diagonal, so an
+    out-of-plane polarization produces only out-of-plane shear strain."""
+    _, _, Gamma_0 = build_2d("Willot", 16)
+    Y = jnp.zeros((16, 16, 3, 3))
+    f = jnp.cos(2 * jnp.pi * jnp.arange(16) / 16)[:, None] * jnp.ones((16, 16))
+    Y = Y.at[..., 0, 2].set(f).at[..., 2, 0].set(f)
+    out = Gamma_0.mv(Y)
+    in_plane = out[..., :2, :2]
+    assert float(jnp.abs(in_plane).max()) < 1e-12
+    assert float(jnp.abs(out[..., 0, 2]).max()) > 1e-6
