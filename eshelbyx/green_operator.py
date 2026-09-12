@@ -13,33 +13,73 @@ from eshelbyx.discretization import DiscretizationScheme, spectral_shape
 from eshelbyx.spectral_kernels import compute_G0_hat, compute_isotropic_G0_hat
 
 
+def _lame(C0):
+    """Lame coefficients of an isotropic reference medium."""
+    mu = C0.mu
+    lmbda = C0.kappa - 2.0 / 3.0 * mu
+    return lmbda, mu
+
+
 class GreenOperator(lx.AbstractLinearOperator):
     C0: Tensor
     grid: eqx.Module
     discretization: DiscretizationScheme
-    G0_hat: jax.Array
 
     def __init__(self, grid, C0, discretization):
         self.grid = grid
         self.C0 = C0
         self.discretization = discretization
-        self._compute_G0_hat()
+
+    @property
+    def G0_hat(self):
+        """Fourier kernel on the half spectrum, recomputed on access.
+
+        Exposed for inspection and testing. The hot path does not go through
+        this property; see _apply_G0.
+        """
+        return self._compute_G0_hat()
 
     def _compute_G0_hat(self):
         if isinstance(self.C0, IsotropicTensor4):
-            self.G0_hat = jax.vmap(compute_isotropic_G0_hat, in_axes=(0, 0, 0, None))(
+            return jax.vmap(compute_isotropic_G0_hat, in_axes=(0, 0, 0, None))(
                 self.discretization.D_plus.reshape(-1, 3),
                 self.discretization.D_minus.reshape(-1, 3),
                 self.discretization.singular_mask.ravel(),
                 self.C0,
             )[0].reshape((*spectral_shape(self.grid), 3, 3))
-        else:
-            self.G0_hat = jax.vmap(compute_G0_hat, in_axes=(0, 0, None))(
-                self.discretization.D_plus.reshape(-1, 3),
-                self.discretization.D_minus.reshape(-1, 3),
-                self.discretization.singular_mask,
-                self.C0,
-            ).reshape((*spectral_shape(self.grid), 3, 3))
+        return jax.vmap(compute_G0_hat, in_axes=(0, 0, 0, None))(
+            self.discretization.D_plus.reshape(-1, 3),
+            self.discretization.D_minus.reshape(-1, 3),
+            self.discretization.singular_mask.ravel(),
+            self.C0,
+        ).reshape((*spectral_shape(self.grid), 3, 3))
+
+    def _apply_G0(self, v_hat):
+        """Apply the kernel to a spectral vector field without materialising it.
+
+        For an isotropic reference medium the kernel has the closed form
+
+            G0 = Id / (mu D2)  -  c (D_minus (x) D_plus) / D2**2
+
+        so its action is a scaled copy of v_hat plus a rank-one correction along
+        D_minus. Evaluating it this way keeps only vector-sized temporaries,
+        never the (..., 3, 3) kernel.
+        """
+        if not isinstance(self.C0, IsotropicTensor4):
+            return jnp.einsum("...ij,...j->...i", self._compute_G0_hat(), v_hat)
+
+        D_p = self.discretization.D_plus
+        D_m = self.discretization.D_minus
+        mask = self.discretization.singular_mask[..., None]
+
+        lmbda, mu = _lame(self.C0)
+        D2 = jnp.sum(jnp.real(D_m * D_p), axis=-1)[..., None]
+        D2 = jnp.where(mask, 1.0, D2)  # guard the singular modes before dividing
+
+        c = (lmbda + mu) / (mu * (lmbda + 2.0 * mu))
+        proj = jnp.sum(D_p * v_hat, axis=-1)[..., None]
+        out = v_hat / (mu * D2) - c * D_m * proj / D2**2
+        return jnp.where(mask, 0.0, out)
 
     @partial(jax.remat, prevent_cse=False)
     def _Gamma_0_func_impl(self, Y):

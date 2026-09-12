@@ -31,6 +31,8 @@ Run:
     pytest tests/test_green_operator.py -v
 """
 
+import equinox as eqx
+import jax
 import jax.numpy as jnp
 import jax.random as jr
 import pytest
@@ -90,10 +92,13 @@ def single_mode_displacement(shape, mode, amp):
 
 def compatible_strain(disc, u):
     """Discrete compatible strain eps* = sym_grad_h(u), using the scheme's own
-    symmetric-gradient operator (the same one Gamma_0 uses internally)."""
-    u_hat = jnp.fft.fftn(u, axes=(0, 1, 2))
+    symmetric-gradient operator (the same one Gamma_0 uses internally).
+
+    The scheme's operators live on the half spectrum, so u must go through
+    rfftn rather than fftn."""
+    u_hat = jnp.fft.rfftn(u, axes=(0, 1, 2))
     eps_hat = disc.apply_symmetric_gradient(u_hat)
-    return jnp.fft.ifftn(eps_hat, axes=(0, 1, 2)).real
+    return jnp.fft.irfftn(eps_hat, axes=(0, 1, 2), s=u.shape[:3])
 
 
 def mode_is_singular(disc, shape, mode):
@@ -231,3 +236,91 @@ if __name__ == "__main__":
             Px = P(x)
             row += f"{rel(P(Px), Px):>13.2e}"
         print(row)
+
+
+# --------------------------------------------------------------------------- #
+# 5. Half-spectrum equivalence
+# --------------------------------------------------------------------------- #
+def _gamma_0_full_spectrum(grid, disc, C0, Y):
+    """Reference implementation of Gamma_0 on the FULL fftn spectrum.
+
+    Kept as a test-only oracle: the library uses rfftn throughout, and this
+    pins that optimisation to the mathematically transparent version.
+    """
+    from eshelbyx.discretization import xi_array_1D
+    from eshelbyx.spectral_kernels import compute_isotropic_G0_hat
+
+    N1, N2, N3 = grid.shape
+    L1, L2, L3 = grid.size
+    xi = jnp.stack(
+        jnp.meshgrid(xi_array_1D(N1, L1), xi_array_1D(N2, L2), xi_array_1D(N3, L3), indexing="ij"),
+        axis=-1,
+    )
+    # Staggered schemes derive their singular mask from D_plus/D_minus rather
+    # than from xi, so the differential vectors have to be swapped in before the
+    # mask is recomputed.
+    full = eqx.tree_at(
+        lambda d: (d.xi, d.D_plus, d.D_minus),
+        disc,
+        (xi, disc._D_plus(xi, grid), disc._D_minus(xi, grid)),
+    )
+    full = eqx.tree_at(lambda d: d.singular_mask, full, full._singular_mask(xi, grid))
+    G0_hat = jax.vmap(compute_isotropic_G0_hat, in_axes=(0, 0, 0, None))(
+        full.D_plus.reshape(-1, 3),
+        full.D_minus.reshape(-1, 3),
+        full.singular_mask.ravel(),
+        C0,
+    )[0].reshape((*grid.shape, 3, 3))
+
+    Y_hat = jnp.fft.fftn(Y, axes=(0, 1, 2))
+    v_hat = full.apply_divergence(Y_hat)
+    u_hat = jnp.einsum("...ij,...j->...i", G0_hat, v_hat)
+    eps_hat = full.apply_symmetric_gradient(u_hat)
+    return jnp.fft.ifftn(eps_hat, axes=(0, 1, 2)).real
+
+
+@pytest.mark.parametrize("scheme_name", list(SCHEMES))
+@pytest.mark.parametrize("N", [8, 9])
+def test_half_spectrum_matches_full_spectrum(scheme_name, N, request):
+    if scheme_name == "MS" and N % 2 == 0:
+        request.node.add_marker(
+            pytest.mark.xfail(
+                strict=True,
+                reason="MS is ambiguous at the Nyquist plane on even grids. "
+                "rfftfreq places it at xi3=+pi/h and fftfreq at -pi/h, and since "
+                "D=i*xi is odd the two conventions disagree there. Willot and "
+                "Schneider are insensitive (their D is even at Nyquist, or the "
+                "sign cancels between divergence and symmetric gradient). Same "
+                "root cause as the MS/even idempotency xfail: MS masks only k=0 "
+                "and never Nyquist. Retire this when MS gains a Nyquist mask.",
+            )
+        )
+    """rfftn is exact, not an approximation: every scheme satisfies
+    D(-xi) = conj(D(xi)), so the discarded half of the spectrum carries no
+    independent information. Checked on both an even and an odd grid, since the
+    Nyquist plane only exists for even N."""
+    grid, disc, Gamma_0 = build(scheme_name, N=N)
+
+    key = jr.PRNGKey(0)
+    Y = jr.normal(key, (*grid.shape, 3, 3))
+    Y = 0.5 * (Y + jnp.swapaxes(Y, -1, -2))  # polarization fields are symmetric
+
+    got = Gamma_0.mv(Y)
+    expected = _gamma_0_full_spectrum(grid, disc, make_C0(), Y)
+
+    assert rel(got, expected) < 1e-12, (
+        f"{scheme_name} N={N}: half-spectrum Gamma_0 differs from the full-spectrum "
+        f"reference (relative difference {rel(got, expected):.2e})"
+    )
+
+
+def test_output_is_real_and_symmetric():
+    """irfftn would silently discard an imaginary part if the operator did not
+    preserve Hermitian symmetry, so check the symmetry of the result instead."""
+    grid, _, Gamma_0 = build("Willot", N=8)
+    Y = jr.normal(jr.PRNGKey(1), (*grid.shape, 3, 3))
+    Y = 0.5 * (Y + jnp.swapaxes(Y, -1, -2))
+    out = Gamma_0.mv(Y)
+    assert out.shape == Y.shape
+    assert jnp.isrealobj(out)
+    assert float(jnp.abs(out - jnp.swapaxes(out, -1, -2)).max()) < 1e-14

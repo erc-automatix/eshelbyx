@@ -61,6 +61,7 @@ def A2EMSolver(
     tol=1e-10,
     auto_scale=True,
     step_adaptation=True,
+    scale_clip=(1e-8, 1e8),
     verbose=False,
 ):
     """Adaptive Eyre-Milton solver with reference-medium auto-scaling.
@@ -119,6 +120,7 @@ def A2EMSolver(
         k = _safe_div(norm(eps0), E_norm)
         adapt = jnp.logical_and(auto_scale, E_norm > floor)
         new_scale = jnp.where(adapt, k, scale)
+        new_scale = jnp.clip(new_scale, scale_clip[0], scale_clip[1])
 
         eps_aux_new = 0.5 * (eps0 / new_scale + eps_new)
         X_new = X - lam * Z + (1.0 / new_scale - 1.0 / scale) * W_new
