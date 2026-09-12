@@ -43,6 +43,21 @@ def _(operator):
     return False
 
 
+@lx.is_positive_semidefinite.register(AEMAuxOperator)
+def _(operator):
+    return False
+
+
+@lx.is_negative_semidefinite.register(AEMAuxOperator)
+def _(operator):
+    return False
+
+
+@lx.linearise.register(AEMAuxOperator)
+def _(operator):
+    return operator
+
+
 @eqx.filter_jit
 def KrylovAEMSolver(E_macro, alpha, Gamma_0, max_iter=100, tol=1e-6, options=None):
     """A GMRES Solver of the auxiliary Lippmann-Schwinger equation:
