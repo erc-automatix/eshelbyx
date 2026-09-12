@@ -95,20 +95,20 @@ def test_read_vti_rejects_unknown_marker_field(tmp_path):
         ex.read_vti(path, marker_field="phase")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Grid.__init__ defaults 'markers' to the Python int 0 rather than an "
-    "array, so a grid built without markers cannot be written. Fix scheduled "
-    "with the Grid field cleanup; retire this marker then.",
-)
 def test_read_vti_warns_when_marker_field_is_guessed(tmp_path):
-    """Falling back to the first cell array depends on file ordering, so it
-    must not happen silently."""
+    """Falling back to the first cell array depends on file ordering, so it must
+    not happen silently. A Grid always carries a markers field, so the file is
+    built directly to reach this path."""
     path = tmp_path / "g.vti"
-    grid = ex.Grid(shape=SHAPE, size=SIZE, fields={"phase": np.zeros(SHAPE)})
-    grid.save(path)
+    image = pv.ImageData()
+    image.dimensions = tuple(n + 1 for n in SHAPE)
+    image.spacing = tuple(L / n for L, n in zip(SIZE, SHAPE))
+    image.cell_data["phase"] = np.zeros(int(np.prod(SHAPE)))
+    image.save(path)
+
     with pytest.warns(UserWarning, match="marker_field"):
-        ex.read_vti(path)
+        grid = ex.read_vti(path)
+    assert np.array_equal(np.asarray(grid["markers"]), np.asarray(grid["phase"]))
 
 
 def test_material_map_applied_on_read(tmp_path):

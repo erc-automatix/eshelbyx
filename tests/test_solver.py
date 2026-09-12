@@ -8,19 +8,6 @@ Covers
 * Voigt / Reuss energy bounds
 * degenerate / zero-division cases (homogeneous C==C0, zero macro strain)
 
-Empirically observed robustness gaps (from a faithful reproduction of each
-solver's arithmetic; see the accompanying probe) are encoded as xfail so the
-suite stays green while documenting them, and turns red if they are fixed:
-
-  * AEM       -> NaN on homogeneous C==C0   (0/0 in Delta and in lambda once the
-                                             exact solution is hit in one step)
-  * A2EM(auto)-> ~1% error on (near-)homogeneous media (E_norm -> 1e-12 so the
-                                             auto reference scale blows up)
-  * A2EM,AEM  -> NaN for E_macro == 0        (division by ||E_macro|| = 0)
-  * MS        -> diverges when material stiffer than ~2*C0 (MS convergence cond.)
-
-Written against the eshelbyx / jaxmat API used in elasticity_example.py.
-
 Run:  pytest tests/test_solver.py -v
 """
 
@@ -207,26 +194,8 @@ HOMOG_CASES = {
 }
 
 
-def _homog_marks(solver, case):
-    if solver == "AEM" and case == "C_eq_C0":
-        return pytest.mark.xfail(
-            strict=True,
-            reason="AEM: 0/0 in Delta and lambda when exact solution reached in one step on C==C0",
-        )
-    if solver == "A2EM_auto":
-        return pytest.mark.xfail(
-            strict=False,
-            reason="A2EM auto-scale loses precision on homogeneous media (E_norm -> 1e-12)",
-        )
-    if solver == "MS" and case == "stiffer":
-        return pytest.mark.xfail(strict=True, reason="MS diverges when material stiffer than ~2*C0")
-    return ()
-
-
-@pytest.mark.parametrize(
-    "solver, case",
-    [pytest.param(s, c, marks=_homog_marks(s, c)) for c in HOMOG_CASES for s in ALL_SOLVERS],
-)
+@pytest.mark.parametrize("solver", ALL_SOLVERS)
+@pytest.mark.parametrize("case", list(HOMOG_CASES))
 def test_homogeneous_recovers_macro(solver, case):
     Ev, nuv = HOMOG_CASES[case]
     prob = make_problem(uniform(Ev), uniform(nuv))

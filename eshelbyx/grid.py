@@ -70,8 +70,13 @@ class Grid(eqx.Module):
         self.size = tuple(float(L) for L in size)[:ndim]
         self.origin = tuple(float(o) for o in origin)[:ndim]
         self.periodic = tuple(bool(p) for p in periodic)[:ndim] if periodic else (True,) * ndim
-        self.fields = {"markers": 0}
-        self.fields.update(fields or {})
+        # markers defaults to a real field, not the Python int 0: a grid built
+        # without markers must still be writable, plottable and usable by
+        # apply_material_map.
+        self.fields = {"markers": jnp.zeros(self.shape)}
+        self.fields.update(
+            {key: self._validate_field(value) for key, value in (fields or {}).items()}
+        )
         self.metadata = {}
 
         for key, value in field_kwargs.items():

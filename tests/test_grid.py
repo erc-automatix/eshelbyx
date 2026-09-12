@@ -5,6 +5,7 @@ Run with: pytest tests/test_grid.py -v
 """
 
 import jax.numpy as jnp
+import pytest
 
 from eshelbyx.grid import Grid
 
@@ -95,3 +96,16 @@ def test_material_map():
     assert jnp.max(grid["E"]) == 100.0
     assert jnp.min(grid["nu"]) == 0.2
     assert jnp.max(grid["nu"]) == 0.3
+
+
+def test_markers_default_to_an_array():
+    """A grid built without markers must still have a usable markers field."""
+    grid = Grid(shape=(4, 5, 6), fields={"phase": jnp.zeros((4, 5, 6))})
+    assert jnp.asarray(grid.markers).shape == (4, 5, 6)
+    assert grid.volume_fractions == {0: 1.0}
+
+
+def test_fields_passed_as_dict_are_validated():
+    """_validate_field must apply to the fields dict, not only to kwargs."""
+    with pytest.raises(ValueError, match="incompatible"):
+        Grid(shape=(4, 4, 4), fields={"bad": jnp.zeros((3, 3, 3))})
