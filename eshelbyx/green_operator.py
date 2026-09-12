@@ -1,13 +1,14 @@
 from functools import partial
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
 import lineax as lx
 from jaxmat.tensors import (
-    Tensor,
-    SymmetricTensor2,
     IsotropicTensor4,
+    Tensor,
 )
+
 from eshelbyx.discretization import DiscretizationScheme
 from eshelbyx.spectral_kernels import compute_G0_hat, compute_isotropic_G0_hat
 
@@ -31,14 +32,14 @@ class GreenOperator(lx.AbstractLinearOperator):
                 self.discretization.D_minus.reshape(-1, 3),
                 self.discretization.singular_mask.ravel(),
                 self.C0,
-            )[0].reshape(self.grid.shape + (3, 3))
+            )[0].reshape((*self.grid.shape, 3, 3))
         else:
             self.G0_hat = jax.vmap(compute_G0_hat, in_axes=(0, 0, None))(
                 self.discretization.D_plus.reshape(-1, 3),
                 self.discretization.D_minus.reshape(-1, 3),
                 self.discretization.singular_mask,
                 self.C0,
-            ).reshape(self.grid.shape + (3, 3))
+            ).reshape((*self.grid.shape, 3, 3))
 
     @partial(jax.remat, prevent_cse=False)
     def _Gamma_0_func_impl(self, Y):
@@ -84,7 +85,7 @@ class GreenOperator(lx.AbstractLinearOperator):
         return self  # FIXME
 
     def in_structure(self):
-        return jax.ShapeDtypeStruct(shape=self.grid.shape + (3, 3), dtype=jnp.float64)
+        return jax.ShapeDtypeStruct(shape=(*self.grid.shape, 3, 3), dtype=jnp.float64)
 
     def out_structure(self):
         return self.in_structure()

@@ -1,6 +1,6 @@
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
 
 
 def xi_array_1D(N, L):
@@ -85,9 +85,7 @@ class WillotDiscretization(DiscretizationScheme):
 
     def _q(self, xi, grid):
         # q_i = 2π n_i / N_i = xi_i * (L_i / N_i)
-        return jnp.stack(
-            [xi[..., i] * (grid.size[i] / grid.shape[i]) for i in range(3)], axis=-1
-        )
+        return jnp.stack([xi[..., i] * (grid.size[i] / grid.shape[i]) for i in range(3)], axis=-1)
 
     def _D(self, xi, grid):
         q = self._q(xi, grid) / 2
@@ -114,9 +112,7 @@ class WillotDiscretization(DiscretizationScheme):
             qi = xi_abs[..., i] * (grid.size[i] / grid.shape[i])
             flags.append(is_even & (jnp.abs(qi - jnp.pi) < self.tol))
 
-        nyquist_pairs = (
-            (flags[0] & flags[1]) | (flags[0] & flags[2]) | (flags[1] & flags[2])
-        )
+        nyquist_pairs = (flags[0] & flags[1]) | (flags[0] & flags[2]) | (flags[1] & flags[2])
 
         return zero_mode | nyquist_pairs
 
@@ -136,7 +132,7 @@ class StaggeredDiscretizationScheme(DiscretizationScheme):
 
 class SchneiderDiscretization(StaggeredDiscretizationScheme):
     def _h(self, grid):
-        return jnp.array([L / N for L, N in zip(grid.size, grid.shape)])
+        return jnp.array([L / N for L, N in zip(grid.size, grid.shape, strict=True)])
 
     def _D_plus(self, xi, grid):
         h = self._h(grid)
