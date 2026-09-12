@@ -206,11 +206,13 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-
-# Pyvista
-*.vtk
-*.vti
-*.mat
-
-# VSCode
-.vscode
+# Project
+sandbox/
+biblio/
+**/*.ipynb
+notes/
+docs/latex_macros.yml
+docs/demos# Project
+sandbox/
+**/*_results.vti
+**/*_results.vtk
