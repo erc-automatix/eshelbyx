@@ -1,13 +1,12 @@
 """
 Simple Unit Tests for Grid System
 
-Run with: pytest test_simple_grid.py -v
-Or: python test_simple_grid.py
+Run with: pytest tests/test_grid.py -v
 """
 
 import jax.numpy as jnp
-from eshelbyx.grid import Grid
 
+from eshelbyx.grid import Grid
 
 # ============================================================================
 # TEST: Basic Grid Creation
