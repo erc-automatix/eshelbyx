@@ -3,10 +3,17 @@
 
 format: jb-book
 root: index
-title: jaxmat Documentation
+title: eshelbyx Documentation
 
 
 parts:
   - caption: Quickstart tutorials
     chapters:
-        - file: demos/quickstart/getting_started.ipynb
+        - file: demos/linear_elasticity.ipynb
+        - file: demos/nonlinear_plasticity.ipynb
+  - caption: General resources
+    chapters:
+      - file: theory.md
+      - file: discretization.md
+      - file: solvers.md
+      - file: sharp_bits.md
