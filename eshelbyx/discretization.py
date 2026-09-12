@@ -1,28 +1,68 @@
+"""Discrete differential operators in Fourier space.
+
+Half-spectrum convention
+------------------------
+All strain, stress and polarization fields are real, so their Fourier
+transforms are Hermitian: ``F(-k) = conj(F(k))``. The library therefore works
+on the *half spectrum* produced by ``jnp.fft.rfftn``, in which the last spatial
+axis is truncated to ``N3 // 2 + 1`` modes. Every array held by a
+``DiscretizationScheme`` (``xi``, ``D_plus``, ``D_minus``, ``singular_mask``),
+and the Green kernel built from them, has this reduced shape.
+
+This is exact rather than an approximation, because every scheme satisfies
+``D(-xi) = conj(D(xi))``. The Green kernel is assembled from ``D`` with real
+coefficients, so the whole operator obeys ``M(-xi) = conj(M(xi))`` and maps
+Hermitian input to Hermitian output. The discarded half is recovered exactly by
+``irfftn``.
+
+The practical consequence is that anything passed to ``apply_divergence`` or
+``apply_symmetric_gradient`` must be a half-spectrum field from ``rfftn``, not a
+full ``fftn`` spectrum.
+"""
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 
 
-def xi_array_1D(N, L):
+def xi_array_1D(N, L, real=False):
     """
     Fourier angular frequencies for a domain of size L with N points.
+
+    Parameters
+    ----------
+    N : int
+        Number of points.
+    L : float
+        Domain size.
+    real : bool
+        If True, return only the non-negative frequencies kept by ``rfftn``,
+        i.e. ``N // 2 + 1`` values.
     """
-    freq = jnp.fft.fftfreq(N, d=L / N)
+    freq = jnp.fft.rfftfreq(N, d=L / N) if real else jnp.fft.fftfreq(N, d=L / N)
     return 2.0 * jnp.pi * freq
+
+
+def spectral_shape(grid):
+    """Shape of the half spectrum produced by ``rfftn`` on this grid."""
+    N1, N2, N3 = grid.shape
+    return (N1, N2, N3 // 2 + 1)
 
 
 def xi_array_3D(grid):
     """
-    Returns the grid of Fourier angular frequencies.
+    Grid of Fourier angular frequencies on the half spectrum.
 
-    Output shape: (N1, N2, N3, 3)
+    Output shape: ``(N1, N2, N3 // 2 + 1, 3)``. The last spatial axis is
+    truncated because ``rfftn`` transforms it as a real axis; see the module
+    docstring.
     """
     N1, N2, N3 = grid.shape
     L1, L2, L3 = grid.size
 
     xi1 = xi_array_1D(N1, L1)
     xi2 = xi_array_1D(N2, L2)
-    xi3 = xi_array_1D(N3, L3)
+    xi3 = xi_array_1D(N3, L3, real=True)
 
     return jnp.stack(
         jnp.meshgrid(xi1, xi2, xi3, indexing="ij"),
@@ -31,6 +71,14 @@ def xi_array_3D(grid):
 
 
 class DiscretizationScheme(eqx.Module):
+    """Base class for discrete differential operators.
+
+    A scheme supplies ``D_plus(xi)`` and ``D_minus(xi)``; the divergence and
+    symmetric gradient are derived from them so that one is the negative adjoint
+    of the other, which makes the Green operator self-adjoint. All arrays live
+    on the half spectrum; see the module docstring.
+    """
+
     xi: jax.Array
     D_plus: jax.Array
     D_minus: jax.Array

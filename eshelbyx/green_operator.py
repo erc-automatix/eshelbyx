@@ -9,7 +9,7 @@ from jaxmat.tensors import (
     Tensor,
 )
 
-from eshelbyx.discretization import DiscretizationScheme
+from eshelbyx.discretization import DiscretizationScheme, spectral_shape
 from eshelbyx.spectral_kernels import compute_G0_hat, compute_isotropic_G0_hat
 
 
@@ -32,19 +32,23 @@ class GreenOperator(lx.AbstractLinearOperator):
                 self.discretization.D_minus.reshape(-1, 3),
                 self.discretization.singular_mask.ravel(),
                 self.C0,
-            )[0].reshape((*self.grid.shape, 3, 3))
+            )[0].reshape((*spectral_shape(self.grid), 3, 3))
         else:
             self.G0_hat = jax.vmap(compute_G0_hat, in_axes=(0, 0, None))(
                 self.discretization.D_plus.reshape(-1, 3),
                 self.discretization.D_minus.reshape(-1, 3),
                 self.discretization.singular_mask,
                 self.C0,
-            ).reshape((*self.grid.shape, 3, 3))
+            ).reshape((*spectral_shape(self.grid), 3, 3))
 
     @partial(jax.remat, prevent_cse=False)
     def _Gamma_0_func_impl(self, Y):
+        # Y is real, so its spectrum is Hermitian and only half of it is
+        # independent. rfftn/irfftn work on that half throughout, which is exact
+        # (see the discretization module docstring) and roughly halves both the
+        # transform cost and the size of every intermediate spectral array.
         with jax.named_scope("Gamma0/fft"):
-            Y_hat = jnp.fft.fftn(Y, axes=(0, 1, 2))
+            Y_hat = jnp.fft.rfftn(Y, axes=(0, 1, 2))
 
         with jax.named_scope("Gamma0/div"):
             v_hat = self.discretization.apply_divergence(Y_hat)
@@ -59,8 +63,7 @@ class GreenOperator(lx.AbstractLinearOperator):
             eps_hat = self.discretization.apply_symmetric_gradient(u_hat)
 
         with jax.named_scope("Gamma0/ifft"):
-            out = jnp.fft.ifftn(eps_hat, axes=(0, 1, 2)).real
-            return out
+            return jnp.fft.irfftn(eps_hat, axes=(0, 1, 2), s=self.grid.shape)
 
     def Gamma_0_func(self, Y):
         return self._Gamma_0_func_impl(Y)
@@ -94,3 +97,23 @@ class GreenOperator(lx.AbstractLinearOperator):
 @lx.is_symmetric.register(GreenOperator)
 def _(operator):
     return False
+
+
+# lineax queries every operator tag during __check_init__ and calls linearise
+# from linear_solve, so all four must be registered or the operator cannot be
+# constructed at all. Definiteness is declared conservatively here; Gamma_0 is
+# in fact self-adjoint for a consistent discretization, but asserting that
+# changes which solvers lineax selects and is handled separately.
+@lx.is_positive_semidefinite.register(GreenOperator)
+def _(operator):
+    return False
+
+
+@lx.is_negative_semidefinite.register(GreenOperator)
+def _(operator):
+    return False
+
+
+@lx.linearise.register(GreenOperator)
+def _(operator):
+    return operator
