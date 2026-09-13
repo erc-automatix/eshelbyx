@@ -17,18 +17,17 @@ def compute_G0_hat_inv(D_plus, D_minus, C0):
     return jnp.einsum("m, mijn, n -> ij", D_minus, C0.tensor, D_plus)
 
 
-def compute_G0_hat(D_plus, D_minus, C0, tol=1e-14):
+def compute_G0_hat(D_plus, D_minus, singular_mask, C0):
     """
-    Compute G0_hat with explicit zero-frequency handling.
+    Green kernel for a general (anisotropic) reference medium.
+
+    Inverts the discrete acoustic tensor mode by mode. The isotropic case has a
+    closed form and should go through :func:`compute_isotropic_G0_hat` instead,
+    which is both cheaper and better conditioned.
     """
     G0_hat_inv = compute_G0_hat_inv(D_plus, D_minus, C0)
-
-    norm_D = jnp.sqrt(jnp.dot(D_minus, D_plus))
-    return jnp.where(
-        norm_D > tol,
-        jnp.linalg.inv(G0_hat_inv),
-        jnp.zeros_like(G0_hat_inv),
-    )
+    safe = jnp.where(singular_mask, jnp.eye(3, dtype=G0_hat_inv.dtype), G0_hat_inv)
+    return jnp.where(singular_mask, 0.0, jnp.linalg.inv(safe))
 
 
 def compute_isotropic_G0_hat(D_plus, D_minus, singular_mask, C0):

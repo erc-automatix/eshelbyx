@@ -36,7 +36,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import pytest
-from jaxmat.tensors import IsotropicTensor4
+from jaxmat.tensors import IsotropicTensor4, SymmetricTensor4
 
 from eshelbyx.discretization import (
     MoulinecSuquetDiscretization,
@@ -409,3 +409,70 @@ def test_2d_anti_plane_shear_decouples():
     in_plane = out[..., :2, :2]
     assert float(jnp.abs(in_plane).max()) < 1e-12
     assert float(jnp.abs(out[..., 0, 2]).max()) > 1e-6
+
+
+# --------------------------------------------------------------------------- #
+# 8. Anisotropic reference medium
+# --------------------------------------------------------------------------- #
+def cubic_C0():
+    """A genuinely anisotropic (positive definite) reference medium."""
+    C = jnp.zeros((6, 6))
+    C = C.at[0, 0].set(2.0).at[1, 1].set(2.0).at[2, 2].set(3.0)
+    C = C.at[0, 1].set(0.8).at[1, 0].set(0.8)
+    C = C.at[0, 2].set(0.6).at[2, 0].set(0.6)
+    C = C.at[1, 2].set(0.6).at[2, 1].set(0.6)
+    return SymmetricTensor4(array=C.at[3, 3].set(1.2).at[4, 4].set(0.9).at[5, 5].set(0.9))
+
+
+@pytest.mark.parametrize("scheme_name", list(SCHEMES))
+def test_isotropic_C0_through_the_general_path(scheme_name):
+    """Passing an isotropic C0 as a SymmetricTensor4 goes through the general
+    kernel; it must agree with the closed-form isotropic one."""
+    grid = make_grid(8)
+    disc = SCHEMES[scheme_name](grid)
+    C0 = make_C0()
+    general = GreenOperator(grid=grid, C0=C0.to_symmetric(), discretization=disc)
+    closed_form = GreenOperator(grid=grid, C0=C0, discretization=disc)
+
+    Y = jr.normal(jr.PRNGKey(0), (*grid.shape, 3, 3))
+    Y = 0.5 * (Y + jnp.swapaxes(Y, -1, -2))
+    assert rel(general.mv(Y), closed_form.mv(Y)) < 1e-12
+
+
+@pytest.mark.parametrize("scheme_name", list(SCHEMES))
+def test_patch_test_with_anisotropic_C0(scheme_name):
+    """The general kernel must satisfy the patch test for a truly anisotropic
+    reference medium.
+
+    An odd N is used because MS is ambiguous at Nyquist on even grids, as
+    elsewhere in this file.
+    """
+    N = 9
+    grid = make_grid(N)
+    disc = SCHEMES[scheme_name](grid)
+    Gamma_0 = GreenOperator(grid=grid, C0=cubic_C0(), discretization=disc)
+
+    u = single_mode_displacement(grid.shape, (1, 2, 1), AMP)
+    eps_star = compatible_strain(disc, u)
+    assert rel(Gamma_0.mv(Gamma_0.apply_C0(eps_star)), eps_star) < ATOL
+
+
+@pytest.mark.parametrize("scheme_name", list(SCHEMES))
+def test_acoustic_tensor_is_inverted_by_the_kernel(scheme_name):
+    """G0_hat . A = I on the non-singular modes.
+
+    The acoustic tensor is built from the scheme's own divergence and symmetric
+    gradient, so a scheme that overrides those with a different index convention
+    (Schneider) still gets the right kernel. Nothing else enforces that coupling.
+    """
+    grid = make_grid(8)
+    disc = SCHEMES[scheme_name](grid)
+    C0 = cubic_C0()
+    G0_hat = GreenOperator(grid=grid, C0=C0, discretization=disc).G0_hat
+
+    A = disc.acoustic_tensor(C0)
+    prod = jnp.einsum("...ij,...jk->...ik", G0_hat, A)
+    keep = ~disc.singular_mask
+    identity = jnp.broadcast_to(jnp.eye(3), prod.shape)
+    err = jnp.where(keep[..., None, None], jnp.abs(prod - identity), 0.0)
+    assert float(err.max()) < 1e-10

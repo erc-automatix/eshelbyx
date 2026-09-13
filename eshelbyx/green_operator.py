@@ -10,7 +10,7 @@ from jaxmat.tensors import (
 )
 
 from eshelbyx.discretization import DiscretizationScheme, spectral_shape
-from eshelbyx.spectral_kernels import compute_G0_hat, compute_isotropic_G0_hat
+from eshelbyx.spectral_kernels import compute_isotropic_G0_hat
 
 
 def _lame(C0):
@@ -105,12 +105,15 @@ class GreenOperator(lx.AbstractLinearOperator):
                 self.discretization.singular_mask.ravel(),
                 self.C0,
             )[0].reshape((*spectral_shape(self.grid), 3, 3))
-        return jax.vmap(compute_G0_hat, in_axes=(0, 0, 0, None))(
-            self.discretization.D_plus.reshape(-1, 3),
-            self.discretization.D_minus.reshape(-1, 3),
-            self.discretization.singular_mask.ravel(),
-            self.C0,
-        ).reshape((*spectral_shape(self.grid), 3, 3))
+        # General reference medium: invert the discrete acoustic tensor mode by
+        # mode. It is assembled from the scheme's own operators rather than from
+        # D_minus . C0 . D_plus, because a scheme may override the divergence
+        # and symmetric gradient with a different index convention (Schneider
+        # does), in which case the latter is not its acoustic tensor.
+        A = self.discretization.acoustic_tensor(self.C0)
+        mask = self.discretization.singular_mask[..., None, None]
+        safe = jnp.where(mask, jnp.eye(3, dtype=A.dtype), A)
+        return jnp.where(mask, 0.0, jnp.linalg.inv(safe))
 
     def _apply_G0(self, v_hat):
         """Apply the kernel to a spectral vector field without materialising it.

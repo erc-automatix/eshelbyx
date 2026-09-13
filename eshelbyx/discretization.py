@@ -132,6 +132,28 @@ class DiscretizationScheme(eqx.Module):
         """Return differential vector D(xi)."""
         return self._D(xi, grid)
 
+    def acoustic_tensor(self, C0):
+        """Discrete acoustic tensor A(xi) = div_h . C0 . sym_grad_h.
+
+        Assembled by applying the scheme's *own* divergence and symmetric
+        gradient to the three unit displacement directions, so it is correct for
+        any scheme, including those that override those operators with a
+        different index convention. The Green kernel is its inverse.
+
+        Returns
+        -------
+        array of shape ``spectral_shape + (3, 3)``
+        """
+        C0_full = jnp.asarray(C0.to_symmetric().tensor)
+        columns = []
+        for j in range(3):
+            u_hat = jnp.zeros((*self.D_plus.shape[:-1], 3), dtype=self.D_plus.dtype)
+            u_hat = u_hat.at[..., j].set(1.0)
+            eps_hat = self.apply_symmetric_gradient(u_hat)
+            sig_hat = jnp.einsum("ijkl,...kl->...ij", C0_full, eps_hat)
+            columns.append(self.apply_divergence(sig_hat))
+        return jnp.stack(columns, axis=-1)
+
     def apply_divergence(self, tau_hat):
         return jnp.einsum(
             "...ij,...j->...i",
