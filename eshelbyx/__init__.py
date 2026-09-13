@@ -40,6 +40,7 @@ from eshelbyx.discretization import (  # noqa: E402
 )
 from eshelbyx.green_operator import GreenOperator  # noqa: E402
 from eshelbyx.grid import Grid  # noqa: E402
+from eshelbyx.material import Material  # noqa: E402
 from eshelbyx.io import read_vti, write_vti  # noqa: E402
 from eshelbyx.krylov_solver import KrylovAEMSolver  # noqa: E402
 from eshelbyx.solver import A2EMSolver, AEMSolver, DRSolver, MSSolver  # noqa: E402
@@ -57,6 +58,8 @@ __all__ = [
     # Geometry and data
     "Grid",
     "KrylovAEMSolver",
+    # Material
+    "Material",
     # Solvers
     "MSSolver",
     "MoulinecSuquetDiscretization",
